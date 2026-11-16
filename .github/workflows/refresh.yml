@@ -39,9 +39,14 @@ jobs:
     timeout-minutes: 200
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy_retry.outputs.page_url }}
     steps:
+      # Check out the branch as it is when this job starts. (By default a run that waited in the
+      # queue would start from the commit that was current when it was queued, and then collide
+      # with the data saved by the run ahead of it.)
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
 
       - uses: actions/setup-python@v7
         with:
@@ -66,29 +71,53 @@ jobs:
           git add site/data
           if git diff --cached --quiet; then
             echo "No data changes to commit."
-          else
-            git commit -m "data: $(python -m pipeline.report --commit-message)"
-            # If someone pushed while the job was running, replay our data commit on top and try again.
-            for attempt in 1 2 3; do
-              if git push origin "HEAD:${GITHUB_REF_NAME}"; then
-                exit 0
-              fi
-              git fetch origin "${GITHUB_REF_NAME}"
-              git rebase "origin/${GITHUB_REF_NAME}"
-            done
-            echo "Could not push the data commit after three attempts." >&2
-            exit 1
+            exit 0
           fi
+          git commit -m "data: $(python -m pipeline.report --commit-message)"
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            echo "Push rejected: the branch moved while this job was running (attempt ${attempt})."
+            git fetch origin "${GITHUB_REF_NAME}"
+            if ! git rebase "origin/${GITHUB_REF_NAME}"; then
+              # The data files were changed by someone else too. Machine-written files cannot be
+              # merged, so drop this run's copy and publish what is saved on the branch instead.
+              git rebase --abort
+              git reset --hard "origin/${GITHUB_REF_NAME}"
+              echo "::error::This run's data could not be saved because the data files changed underneath it. The saved data is published instead; the next run will fetch again."
+              exit 1
+            fi
+          done
+          echo "::error::Could not push the data commit after three attempts."
+          exit 1
+
+      # Never publish damaged files: if anything is unreadable, leave the site as it was.
+      - name: Check the data files are intact
+        if: always()
+        id: validate
+        run: python -m pipeline.report --validate-site
 
       - name: Package the dashboard
-        if: always()
+        if: always() && steps.validate.outcome == 'success'
         uses: actions/upload-pages-artifact@v5
         with:
           path: site
 
       - name: Publish to GitHub Pages
-        if: always()
+        if: always() && steps.validate.outcome == 'success'
         id: deploy
+        continue-on-error: true
+        uses: actions/deploy-pages@v5
+
+      # GitHub sometimes cannot see the package for a few seconds after it is uploaded.
+      - name: Pause before a second publish attempt
+        if: always() && steps.deploy.outcome == 'failure'
+        run: sleep 45
+
+      - name: Publish to GitHub Pages (second attempt)
+        if: always() && steps.deploy.outcome == 'failure'
+        id: deploy_retry
         uses: actions/deploy-pages@v5
 
       # Opens (or updates, or closes) an issue so someone is told, and marks this run failed

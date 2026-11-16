@@ -4,6 +4,7 @@
     python -m pipeline.report --commit-message   # one line for the data commit
     python -m pipeline.report --record-failure "what happened"   # the job died before/outside the fetch step
     python -m pipeline.report --issue            # open / update / close the GitHub issue; exit 1 if the refresh failed
+    python -m pipeline.report --validate-site    # exit 1 unless every published data file is intact
 
 Used by the scheduled workflow. It only reads the JSON the run wrote, so it keeps
 working even when the fetch code itself is broken.
@@ -12,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import subprocess
 import sys
@@ -104,6 +106,49 @@ def record_failure(reason):
     snapshot.write_json(config.RUNS_JSON, runs[:config.RUN_LOG_KEEP])
 
 
+def validate_site():
+    """Problems that must stop a publish: the dashboard is only as good as the files it is handed.
+
+    Returns a list of messages; empty means every data file parses and has the shape the page expects.
+    """
+    problems = []
+
+    def load(path, label):
+        try:
+            with open(str(path), encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            problems.append("%s cannot be read (%s)" % (label, exc.__class__.__name__))
+            return None
+        if "<<<<<<<" in text or ">>>>>>>" in text:
+            problems.append("%s contains merge-conflict markers" % label)
+            return None
+        try:
+            return json.loads(text)
+        except ValueError as exc:
+            problems.append("%s is not valid JSON (%s)" % (label, str(exc)[:80]))
+            return None
+
+    index = load(config.INDEX_JSON, "index.json")
+    status = load(config.STATUS_JSON, "status.json")
+    runs = load(config.RUNS_JSON, "runs.json")
+    if status is not None and not isinstance(status, dict):
+        problems.append("status.json is not an object")
+    if runs is not None and not isinstance(runs, list):
+        problems.append("runs.json is not a list")
+    if index is not None:
+        entries = index.get("snapshots") if isinstance(index, dict) else None
+        if not isinstance(entries, list) or not entries:
+            problems.append("index.json lists no snapshots")
+        else:
+            for entry in entries:
+                name = "snapshots/%s.json" % entry.get("as_of")
+                snap = load(config.SNAPSHOT_DIR / ("%s.json" % entry.get("as_of")), name)
+                if snap is not None and not (isinstance(snap, dict) and isinstance(snap.get("rows"), list) and snap["rows"]):
+                    problems.append("%s has no rows" % name)
+    return problems
+
+
 def _links():
     from . import health
     return health.repo_links()
@@ -151,7 +196,16 @@ def main(argv=None):
     parser.add_argument("--commit-message", action="store_true")
     parser.add_argument("--record-failure", metavar="REASON")
     parser.add_argument("--issue", action="store_true")
+    parser.add_argument("--validate-site", action="store_true")
     args = parser.parse_args(argv)
+
+    if args.validate_site:
+        problems = validate_site()
+        for problem in problems:
+            print("::error::Data file check failed: %s" % problem)
+        if not problems:
+            print("Data files are intact.")
+        return 1 if problems else 0
 
     if args.record_failure:
         record_failure(args.record_failure)

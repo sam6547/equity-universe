@@ -105,6 +105,50 @@ class RecordFailureTest(unittest.TestCase):
             self.assertEqual(report.main(["--issue"]), 0)
 
 
+class ValidateSiteTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="dash-validate-")
+        self.saved = {k: getattr(config, k) for k in ("DATA_DIR", "SNAPSHOT_DIR", "INDEX_JSON", "STATUS_JSON", "RUNS_JSON")}
+        config.set_data_dir(self.tmp)
+        snapshot.write_json(config.SNAPSHOT_DIR / "2026-11-13.json", {"as_of": "2026-11-13", "rows": [{"s": "A"}]})
+        snapshot.write_json(config.INDEX_JSON, {"latest": "2026-11-13", "snapshots": [{"as_of": "2026-11-13"}]})
+        snapshot.write_json(config.STATUS_JSON, {"overall": "ok"})
+        snapshot.write_json(config.RUNS_JSON, [{"mode": "full"}])
+
+    def tearDown(self):
+        for key, value in self.saved.items():
+            setattr(config, key, value)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_intact_files_pass(self):
+        self.assertEqual(report.validate_site(), [])
+        with mock.patch("builtins.print"):
+            self.assertEqual(report.main(["--validate-site"]), 0)
+
+    def test_half_merged_files_are_refused(self):
+        with open(str(config.STATUS_JSON), "w") as handle:
+            handle.write('<<<<<<< HEAD\n{"overall":"ok"}\n=======\n{"overall":"ok"}\n>>>>>>> 7efa745\n')
+        problems = report.validate_site()
+        self.assertEqual(problems, ["status.json contains merge-conflict markers"])
+        with mock.patch("builtins.print"):
+            self.assertEqual(report.main(["--validate-site"]), 1)
+
+    def test_truncated_or_missing_files_are_refused(self):
+        with open(str(config.SNAPSHOT_DIR / "2026-11-13.json"), "w") as handle:
+            handle.write('{"as_of": "2026-11-13", "rows": [')
+        self.assertIn("snapshots/2026-11-13.json is not valid JSON", report.validate_site()[0])
+        os.remove(str(config.SNAPSHOT_DIR / "2026-11-13.json"))
+        self.assertIn("cannot be read", report.validate_site()[0])
+        os.remove(str(config.INDEX_JSON))
+        self.assertTrue(any("index.json cannot be read" in p for p in report.validate_site()))
+
+    def test_empty_shapes_are_refused(self):
+        snapshot.write_json(config.SNAPSHOT_DIR / "2026-11-13.json", {"as_of": "2026-11-13", "rows": []})
+        self.assertEqual(report.validate_site(), ["snapshots/2026-11-13.json has no rows"])
+        snapshot.write_json(config.INDEX_JSON, {"snapshots": []})
+        self.assertEqual(report.validate_site(), ["index.json lists no snapshots"])
+
+
 class DividendFallbackTest(unittest.TestCase):
     URow = {"name": "Toyota", "country": "JAPAN", "sector": "", "industry": ""}
 

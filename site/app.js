@@ -169,7 +169,7 @@
     });
     cols.push(
       { key: 'eps_adj', label: 'Last FY adj.', group: 'eps', ds: 'a', adj: true,
-        title: 'The latest reported fiscal year\u2019s EPS on the analysts\u2019 (adjusted) basis - the like-for-like starting point for the estimates. Exchange-listed tickers only.' },
+        title: 'The latest reported fiscal year\u2019s EPS on the analysts\u2019 (adjusted) basis - the like-for-like starting point for the estimates. Exchange-listed tickers only; for REITs analysts quote funds from operations.' },
       { key: 'feps', label: 'Next FY*', group: 'eps', ds: 'f', fmt: function (v) { return fmtNum(v, 2); }, est: true,
         title: 'Next-fiscal-year consensus EPS implied by Yahoo’s forward P/E (price ÷ forward P/E). Covers OTC tickers that have no Nasdaq forecast.' },
       { key: 'mcap', label: 'Market cap', group: 'val', ds: 'f', fmt: function (v, r) { return fmtMoney(v, cur(r)); } },

@@ -31,6 +31,9 @@ universe.csv ──▶ pipeline/ (Python, standard library only) ──▶ site/
 | 10-year Treasury yield | U.S. Treasury (FRED as backup) |
 | Inflation (CPI) | Bureau of Labor Statistics (FRED as backup) |
 
+Analysts' figures (the estimates and "Last FY adj.") are on each company's adjusted basis; for
+REITs that means funds from operations rather than earnings.
+
 Companies that report in another currency (about half the list) are converted into
 the currency the stock trades in; the ticker's detail panel shows the original figures.
 

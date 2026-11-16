@@ -550,7 +550,8 @@ def parse_search(payload, symbol):
 
 def fetch_profile(client, symbol):
     # type: (net.Client, str) -> Result
-    params = urllib.parse.urlencode({"q": yahoo_symbol(symbol), "quotesCount": 6, "newsCount": 0, "listsCount": 0})
+    # Ask for a dozen matches: the exact ticker is not always among the first few, depending on where the job runs.
+    params = urllib.parse.urlencode({"q": yahoo_symbol(symbol), "quotesCount": 12, "newsCount": 0, "listsCount": 0})
     resp = client.get(SEARCH_URL % params)
     if resp.kind == net.NOT_FOUND:
         return Result.no_data("symbol not found in Yahoo search")

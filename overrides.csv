@@ -1,0 +1,7 @@
+symbol,field,value,note
+# Optional: figures typed in by hand. They win over fetched values and show with a pencil mark.
+# Fields: name country sector industry exch price mcap ev ebitda fcf dy dg5 z f feps eps_YYYY
+# Examples (delete the leading # to use one):
+# A,eps_2026,6.20,GuruFocus EPS without NRI - read 2026-11-16
+# SNY,z,2.33,GuruFocus Altman Z
+# TRI,country,Canada,

@@ -1,0 +1,11 @@
+# The workbook holds personal research links - only universe.csv (tickers + labels) is published.
+*.xlsx
+~$*
+
+# Local scratch output (trial runs, outage demo, logs)
+build/
+
+__pycache__/
+*.pyc
+.DS_Store
+.claude/

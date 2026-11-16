@@ -1,0 +1,100 @@
+name: Refresh data
+
+# Runs every day. The first run after the US trading week closes (Saturday) does the full
+# refresh; the following days retry anything that failed, or simply record that the job is
+# alive. Every run republishes the dashboard, so a failure shows up on the page itself.
+on:
+  schedule:
+    - cron: "17 11 * * *"          # 11:17 UTC daily (off the hour: GitHub's scheduler is busiest at :00)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Re-fetch everything for the current week (normally only missing pieces are fetched)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "!site/data/**"
+      - "pipeline/**"
+      - "tests/**"
+      - "universe.csv"
+      - "overrides.csv"
+      - ".github/workflows/refresh.yml"
+
+permissions:
+  contents: write    # commit the refreshed data files
+  pages: write       # publish the dashboard
+  id-token: write    # required by the Pages deployment
+  issues: write      # open / close the "refresh needs attention" issue
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 200
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # No packages to install: the job uses only Python's standard library.
+      - name: Unit tests
+        run: python -m unittest discover -s tests -t .
+
+      - name: Fetch data
+        run: python -m pipeline.run ${{ (github.event_name == 'workflow_dispatch' && inputs.force) && '--force' || '' }}
+
+      - name: Record a failure that happened outside the fetch
+        if: failure()
+        run: python -m pipeline.report --record-failure "a step failed before or during the fetch - see the run log"
+
+      - name: Commit data
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data
+          if git diff --cached --quiet; then
+            echo "No data changes to commit."
+          else
+            git commit -m "data: $(python -m pipeline.report --commit-message)"
+            # If someone pushed while the job was running, replay our data commit on top and try again.
+            for attempt in 1 2 3; do
+              if git push origin "HEAD:${GITHUB_REF_NAME}"; then
+                exit 0
+              fi
+              git fetch origin "${GITHUB_REF_NAME}"
+              git rebase "origin/${GITHUB_REF_NAME}"
+            done
+            echo "Could not push the data commit after three attempts." >&2
+            exit 1
+          fi
+
+      - name: Package the dashboard
+        if: always()
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - name: Publish to GitHub Pages
+        if: always()
+        id: deploy
+        uses: actions/deploy-pages@v5
+
+      # Opens (or updates, or closes) an issue so someone is told, and marks this run failed
+      # when the refresh itself failed - GitHub then emails the repository owner.
+      - name: Report health
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -m pipeline.report --issue

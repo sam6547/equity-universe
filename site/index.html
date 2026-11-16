@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Equity Universe</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Cpath d='M7 22l6-7 5 4 7-10' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <h1>Equity Universe</h1>
+    <p id="subtitle" class="sub">Loading data…</p>
+  </div>
+
+  <div class="tabs" role="tablist" aria-label="Views">
+    <button type="button" role="tab" id="tab-universe" aria-controls="view-universe" aria-selected="true">Universe</button>
+    <button type="button" role="tab" id="tab-health" aria-controls="view-health" aria-selected="false">
+      Data health <span id="health-pill" class="pill" hidden></span>
+    </button>
+  </div>
+
+  <div class="week" id="week-control">
+    <button type="button" id="week-prev" class="icon-btn" aria-label="Earlier week" title="Earlier week">&#8249;</button>
+    <label class="sr-only" for="week-select">Week ending</label>
+    <select id="week-select" title="Choose which week to show"></select>
+    <button type="button" id="week-next" class="icon-btn" aria-label="Later week" title="Later week">&#8250;</button>
+  </div>
+</header>
+
+<div id="banners" aria-live="polite"></div>
+
+<main>
+  <section id="view-universe" role="tabpanel" aria-labelledby="tab-universe">
+    <div id="tiles" class="tiles"></div>
+
+    <div class="toolbar">
+      <div class="filters">
+        <label class="sr-only" for="q">Search ticker or company</label>
+        <input id="q" type="search" placeholder="Search ticker or company" autocomplete="off" spellcheck="false">
+        <label class="sr-only" for="f-country">Country</label>
+        <select id="f-country"></select>
+        <label class="sr-only" for="f-sector">Sector</label>
+        <select id="f-sector"></select>
+        <label class="sr-only" for="f-exch">Exchange</label>
+        <select id="f-exch"></select>
+        <label class="check"><input id="f-issues" type="checkbox"> Only rows with old or missing data</label>
+      </div>
+      <div class="actions">
+        <span id="row-count" class="count"></span>
+        <div id="group-toggles" class="chips" role="group" aria-label="Column groups"></div>
+        <button type="button" id="export" class="btn">Export CSV</button>
+      </div>
+    </div>
+    <p class="key">
+      <span><i>Italic</i> = analyst estimate</span>
+      <span><span class="mark stale-mark" aria-hidden="true">&#9719;</span> carried over from an earlier week</span>
+      <span><span class="mark check-mark" aria-hidden="true">?</span> check against the source</span>
+      <span><span class="mark" aria-hidden="true">&#9998;</span> typed in by hand</span>
+      <span>&mdash; not available</span>
+      <span>Click a row for detail and sources</span>
+    </p>
+
+    <div id="table-wrap" class="table-wrap" tabindex="0" aria-label="Equity universe table">
+      <table id="grid">
+        <thead id="grid-head"></thead>
+        <tbody id="grid-body"></tbody>
+      </table>
+      <p id="empty" class="empty" hidden>No tickers match these filters.</p>
+    </div>
+  </section>
+
+  <section id="view-health" role="tabpanel" aria-labelledby="tab-health" hidden></section>
+</main>
+
+<aside id="drawer" class="drawer" aria-label="Ticker detail" hidden></aside>
+<div id="tooltip" class="tooltip" hidden></div>
+
+<noscript><p class="empty">This dashboard needs JavaScript to load its data.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>

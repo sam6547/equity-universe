@@ -102,6 +102,22 @@ class DividendTest(unittest.TestCase):
         self.assertIsNone(out["yield"])
         self.assertIsNone(out["growth5"])
 
+    def test_gap_with_long_history_still_reports_growth_up_to_the_last_payment(self):
+        pays = self.quarterly(last=D(2025, 3, 31))
+        out = compute.dividend_metrics(pays, self.AS_OF, 100.0)
+        self.assertEqual(out["status"], "gap")
+        self.assertIsNone(out["yield"])
+        self.assertAlmostEqual(out["growth5"], 0.05, places=3)
+        self.assertTrue(out["growth_stale"])
+        self.assertFalse(compute.dividend_metrics(self.quarterly(), self.AS_OF, 100.0)["growth_stale"])
+
+    def test_patchy_history_gives_no_growth_figure(self):
+        # Only four payments on record over six years: two in the latest year, one five years earlier.
+        pays = [(D(2020, 3, 30), 0.116), (D(2024, 3, 27), 0.127), (D(2024, 9, 30), 0.166), (D(2025, 3, 31), 0.269)]
+        out = compute.dividend_metrics(pays, self.AS_OF, 21.83)
+        self.assertEqual(out["status"], "gap")
+        self.assertIsNone(out["growth5"])
+
     def test_long_stopped_payer_is_zero(self):
         out = compute.dividend_metrics([(D(2018, 9, 5), 1.0), (D(2019, 3, 5), 1.0), (D(2019, 9, 5), 1.0)], self.AS_OF, 80.0)
         self.assertEqual(out["status"], "none")

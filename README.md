@@ -21,11 +21,12 @@ universe.csv ──▶ pipeline/ (Python, standard library only) ──▶ site/
 | Country | The workbook's label; Nasdaq's listing where the workbook is blank |
 | 2023 – 2025 EPS (reported) | Yahoo Finance income statements - GAAP diluted EPS |
 | 2026 – 2030 EPS (estimates) | Nasdaq analyst forecasts - consensus for the next 3-4 fiscal years, **exchange-listed stocks only** |
-| "Next FY" EPS | Yahoo's next-year consensus, recovered from price ÷ forward P/E (covers OTC tickers too) |
+| "Last FY adj." EPS | The latest reported year on the analysts' adjusted basis (worked out from Nasdaq's forecast growth figures) - the like-for-like starting point for the estimates. Exchange-listed stocks only |
+| "Next FY" EPS | Yahoo's next-year consensus, recovered from price ÷ forward P/E (covers many OTC tickers too) |
 | Market cap, Enterprise value | Yahoo Finance valuation measures |
 | EBITDA, Free cash flow | Yahoo Finance statements, trailing twelve months |
-| Dividend yield, 5-year dividend growth | Calculated from Yahoo's dividend history |
-| Altman Z, Piotroski F | **Calculated here** from Yahoo's statements (formulas in `pipeline/compute.py`) |
+| Dividend yield, 5-year dividend growth | Calculated from Yahoo's dividend history. Where that history has holes (many Japanese ADRs), yield comes from the cash-flow statement instead: dividends paid ÷ market value |
+| Altman Z, Piotroski F | **Calculated here** from Yahoo's statements (formulas in `pipeline/compute.py`). Where a company reports no separate retained-earnings line, Z uses total reserves |
 | CAGR of S&P 500 | Yahoo Finance index history (FRED as backup) |
 | 10-year Treasury yield | U.S. Treasury (FRED as backup) |
 | Inflation (CPI) | Bureau of Labor Statistics (FRED as backup) |
@@ -33,23 +34,38 @@ universe.csv ──▶ pipeline/ (Python, standard library only) ──▶ site/
 Companies that report in another currency (about half the list) are converted into
 the currency the stock trades in; the ticker's detail panel shows the original figures.
 
-### Sources in the workbook that cannot be automated
+### What cannot be automated, and why
 
-GuruFocus, MarketWatch and Yahoo's profile / key-statistics pages only serve people
-using a browser - they refuse any script (bot protection, or a login token Yahoo will
-not issue to scripts). The job does not try to get around that. In practice:
+GuruFocus, MarketWatch and Yahoo's profile / key-statistics pages only serve people using
+a browser. GuruFocus sits behind Cloudflare bot protection, MarketWatch behind DataDome,
+and Yahoo hands its data token only to browser sessions. **The job does not try to get past
+those protections** - no disguised browsers, no automated page-scraping of protected sites.
+It uses only feeds that answer an honestly identified script, and reports a refusal instead
+of working around it.
 
-* **GuruFocus "EPS without NRI" and its 5-year estimates** → reported GAAP EPS from Yahoo, and Nasdaq's
-  consensus estimates. These are *not the same numbers*: GAAP EPS includes one-off items, and Nasdaq
-  has no estimates for OTC-traded ADRs.
-* **GuruFocus Z-Score / F-Score** → calculated from the statements. Expect small differences; the Z-Score
-  is blank where Yahoo has no retained-earnings figure and for banks and insurers.
-* **Yahoo "levered free cash flow" and its S&P-calculated EBITDA** → free cash flow (operating cash flow −
-  capex) and EBITDA excluding unusual items, from the same filings.
+What that costs, column by column (the dashboard's *Data health* tab carries the same list):
 
-If you want a figure from one of those pages, type it into `overrides.csv` (see below).
-GuruFocus also sells a data API; with a key, a new module under `pipeline/sources/` could
-feed those columns properly.
+| Wanted | Shown instead | The gap |
+|---|---|---|
+| GuruFocus "EPS without NRI", past years | GAAP diluted EPS per year, plus the latest year on the analysts' adjusted basis (listed stocks) | GAAP includes one-off items; no adjusted figure for OTC tickers or for older years |
+| EPS estimates to 2030, every ticker | Nasdaq consensus, 3-4 years, listed stocks; one implied forward year for most OTC tickers | No per-year estimates for OTC ADRs (about 45% of the list); fifth year usually blank |
+| GuruFocus Z-Score / F-Score | Calculated from statements | Small differences; Z blank for banks and insurers; F blank where a test cannot be calculated |
+| Yahoo levered free cash flow, Yahoo EBITDA | Free cash flow (operating cash flow − capex), EBITDA excluding unusual items | Same filings, different definitions: a few percent apart |
+| Country from Yahoo's profile | Workbook label, else Nasdaq's listing record | Only as good as those two |
+| Full dividend history | Cash-flow-statement yield where the history has holes | 5-year growth is out of date or blank for those tickers |
+
+**Legitimate ways to close the gaps**
+
+* **GuruFocus Data API** (paid, official). One request per ticker returns EPS without NRI,
+  Altman Z and Piotroski F. GuruFocus members get a monthly allowance (2,000 requests on
+  Premium, 20,000 on Premium Plus, as published in November 2026); a full pass over this
+  list is about 950 requests. Its licence covers private use - feeding a *public* page
+  needs their redistribution rights. A source module for it would slot into
+  `pipeline/sources/` next to the others.
+* **GuruFocus Excel add-in** (Premium members): pulls the same figures straight into the workbook.
+* **A licensed market-data API** for analyst estimates on OTC ADRs.
+* **Hand entry**: any figure typed into `overrides.csv` (see below) wins over the fetched
+  one and is marked ✎.
 
 ## How the weekly refresh works
 
@@ -134,7 +150,7 @@ pipeline/snapshot.py       weekly files, carry-forward of last good values, over
 pipeline/health.py         what the Data health tab shows
 pipeline/report.py         GitHub issue + pass/fail for the workflow
 site/                      the dashboard (plain HTML/CSS/JS) and its data
-tests/                     116 tests, including simulated outages
+tests/                     132 tests, including simulated outages
 .github/workflows/         the schedule
 ```
 

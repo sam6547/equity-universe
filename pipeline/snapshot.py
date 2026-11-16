@@ -24,15 +24,19 @@ from . import compute, config, dates, result as res, universe
 # dataset id -> row keys it owns
 DATASET_FIELDS = {
     "q": ("yname", "exch", "exch_raw", "cur", "price", "pweek", "plag", "chg1w", "hi52", "lo52", "ret1y",
-          "dy", "div_ttm", "dg5", "div_freq", "div_last", "div_lapsed", "div_gap", "div_odd"),
+          "dy", "div_ttm", "dg5", "dg5_old", "div_freq", "div_last", "div_lapsed", "div_gap", "div_odd"),
     "f": ("fcur", "fx", "fx_missing", "fy_end", "eps_a", "eps_ar", "mcap", "val_date", "ev", "pe", "fpe", "peg", "feps",
-          "ebitda", "ebitda_b", "fcf", "fcf_b", "eps_ttm", "unit_flag", "z", "zx", "z_miss", "f", "ft"),
+          "ebitda", "ebitda_b", "fcf", "fcf_b", "eps_ttm", "unit_flag", "z", "zx", "z_miss", "z_est", "f", "ft",
+          "dy_cf", "dy_cf_b"),
     "p": ("ysector", "yindustry"),
     "e": ("eps_e",),
+    "a": ("eps_adj",),
     "n": ("ncountry", "nsector", "nindustry", "nmcap"),
 }
-DATASETS = ("q", "f", "p", "e", "n")
-_DERIVED = ("name", "country", "country_alt", "sector", "industry", "src", "mcap_src")
+DATASETS = ("q", "f", "p", "e", "a", "n")
+_DERIVED = ("name", "country", "country_alt", "sector", "industry", "src", "mcap_src", "dy_src")
+# A dataset field that resolve_identity() may fill from another dataset -> the marker saying it did.
+_FALLBACK_MARKER = {"mcap": "mcap_src", "dy": "dy_src"}
 
 
 # --------------------------------------------------------------------------
@@ -99,9 +103,15 @@ def rows_by_symbol(snap):
 # rows
 # --------------------------------------------------------------------------
 def needs_fetch(row, dataset):
-    """True when this dataset failed earlier in the week and should be tried again."""
+    """True when this dataset failed earlier in the week, or was never attempted for this row.
+
+    "Never attempted" happens when a new kind of data is added to the job mid-week: the row has
+    neither values nor a status for it, so it is picked up on the next run instead of waiting a week.
+    """
     code = (row.get("st") or {}).get(dataset, "")
-    return code == "m" or code.startswith("s:")
+    if code == "m" or code.startswith("s:"):
+        return True
+    return not code and not any(row.get(key) is not None for key in DATASET_FIELDS[dataset])
 
 
 def has_values(row, dataset):
@@ -132,6 +142,8 @@ def profile_due(symbol, as_of, base_row, base_as_of):
 def clear_dataset(row, dataset):
     for key in DATASET_FIELDS[dataset]:
         row.pop(key, None)
+        if key in _FALLBACK_MARKER:
+            row.pop(_FALLBACK_MARKER[key], None)   # whatever comes next is no longer the fallback value
     row.setdefault("st", {}).pop(dataset, None)
 
 
@@ -156,8 +168,8 @@ def carry(row, dataset, base_row, base_as_of, code="s"):
         row["st"][dataset] = "m"
         return False
     for key in DATASET_FIELDS[dataset]:
-        if base_row.get(key) is not None:
-            row[key] = base_row[key]
+        if base_row.get(key) is not None and not base_row.get(_FALLBACK_MARKER.get(key, "")):
+            row[key] = base_row[key]      # (a fallback value is not this dataset's own: it is re-derived instead)
     row["st"][dataset] = "%s:%s" % (code, data_date(base_row, dataset, base_as_of))
     return True
 
@@ -174,6 +186,11 @@ def apply_result(row, dataset, outcome, base_row, base_as_of):
 
 def resolve_identity(row, urow):
     """Pick the displayed name / country / sector / industry and remember where each came from."""
+    # undo fallbacks applied on an earlier pass so they are re-decided from the current values
+    if row.get("mcap_src"):
+        row.pop("mcap", None)
+    if row.get("dy_src"):
+        row.pop("dy", None)
     for key in _DERIVED:
         row.pop(key, None)
     src = {}
@@ -206,6 +223,9 @@ def resolve_identity(row, urow):
 
     if row.get("mcap") is None and row.get("nmcap"):
         row["mcap"], row["mcap_src"] = compute.round_sig(row["nmcap"], 6), "nq"
+    # No usable per-share dividend history: fall back to dividends paid per the cash-flow statement.
+    if row.get("dy") is None and row.get("dy_cf") is not None and has_values(row, "q"):
+        row["dy"], row["dy_src"] = row["dy_cf"], "cf"
     if src:
         row["src"] = src
     if not row.get("st"):
@@ -286,7 +306,8 @@ def apply_overrides(rows, overrides):
 # --------------------------------------------------------------------------
 COVERAGE_FIELDS = (
     ("price", "Price"), ("country", "Country"), ("sector", "Sector"), ("industry", "Industry"), ("exch", "Exchange"),
-    ("eps_a", "EPS (actual)"), ("eps_e", "EPS estimates"), ("mcap", "Market cap"), ("ev", "Enterprise value"),
+    ("eps_a", "EPS (actual)"), ("eps_adj", "EPS, adjusted (last year)"), ("eps_e", "EPS estimates"),
+    ("mcap", "Market cap"), ("ev", "Enterprise value"),
     ("ebitda", "EBITDA"), ("fcf", "Free cash flow"), ("dy", "Dividend yield"), ("dg5", "5-yr dividend growth"),
     ("z", "Altman Z"), ("f", "Piotroski F"),
 )

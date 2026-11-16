@@ -57,6 +57,8 @@ class ChartTest(unittest.TestCase):
         self.assertNotIn("dy", out)
         self.assertEqual(out["div_gap"], 1)
         self.assertEqual(out["div_last"], "2025-03-31")
+        self.assertAlmostEqual(out["dg5"], 0.05, places=3)     # growth up to the last payment on record ...
+        self.assertEqual(out["dg5_old"], 1)                    # ... flagged as out of date
 
     def test_stale_price_is_flagged(self):
         payload = fakes.chart_payload(AS_OF)
@@ -139,6 +141,30 @@ class FundamentalsTest(unittest.TestCase):
         self.assertNotIn("eps_a", out)
         self.assertNotIn("ebitda", out)
         self.assertNotIn("z", out)
+
+    def test_dividend_yield_from_the_cash_flow_statement(self):
+        out = yahoo.fundamentals_fields(self.series(), AS_OF, price=100.0)
+        self.assertAlmostEqual(out["dy_cf"], 55 / 2500.0)
+        self.assertTrue(out["dy_cf_b"].startswith("TTM "))
+        fx = compute.FxBook("USD")
+        fx.add("EUR", [(AS_OF - dt.timedelta(days=7 * i), 1.10) for i in range(330)])
+        eur = yahoo.fundamentals_fields(self.series(currency="EUR"), AS_OF, price=100.0, fx=fx)
+        self.assertAlmostEqual(eur["dy_cf"], 55 * 1.10 / 2500.0)                    # converted before dividing by a USD market cap
+
+    def test_dividend_yield_falls_back_to_the_last_fiscal_year(self):
+        raw = fakes.company_series(AS_OF)
+        raw["trailingCashDividendsPaid"] = [((AS_OF - dt.timedelta(days=500)).isoformat(), -55, "USD")]
+        out = yahoo.fundamentals_fields(yahoo.parse_timeseries(fakes.timeseries_payload(raw)), AS_OF, price=100.0)
+        self.assertAlmostEqual(out["dy_cf"], 52 / 2500.0)
+        self.assertEqual(out["dy_cf_b"], "FY 2025-12-31")
+
+    def test_z_score_uses_reserves_when_retained_earnings_are_not_reported(self):
+        series = self.series(with_retained=False, with_equity=True)
+        out = yahoo.fundamentals_fields(series, AS_OF, price=100.0)
+        z, _, _ = compute.altman_z(380, 2200, 1290 - 100 - 300 + 50, 200, 2500, 910, 1150)
+        self.assertAlmostEqual(out["z"], z, places=3)
+        self.assertEqual(out["z_est"], 1)
+        self.assertNotIn("z_est", yahoo.fundamentals_fields(self.series(with_equity=True), AS_OF, price=100.0))   # reported figure wins
 
     def test_z_score_reports_missing_inputs(self):
         out = yahoo.fundamentals_fields(self.series(with_retained=False), AS_OF, price=100.0)
@@ -226,6 +252,42 @@ class NasdaqTest(unittest.TestCase):
             nasdaq.parse_forecast({"unexpected": True})
         with self.assertRaises(ValueError):
             nasdaq.parse_forecast({"status": {}, "data": {"somethingElse": 1}})
+
+    def test_growth_feed(self):
+        parsed = nasdaq.parse_growth(fakes.growth_payload(2026, growth=10.87, pe_actual=30.94, pe_estimate=27.9))
+        self.assertEqual(parsed["actual_year"], "2025")
+        self.assertEqual(parsed["pe"]["2025"], 30.94)
+        self.assertEqual(parsed["growth"]["2026"], 10.87)
+        self.assertIsNone(nasdaq.parse_growth(fakes.FORECAST_UNKNOWN))
+        self.assertIsNone(nasdaq.parse_growth({"status": {}, "data": {"per": {"peRatioChart": []}, "gr": {"peGrowthChart": []}}}))
+        with self.assertRaises(ValueError):
+            nasdaq.parse_growth({"status": {}, "data": {"somethingElse": 1}})
+        with self.assertRaises(ValueError):
+            nasdaq.parse_growth(["nope"])
+
+    def test_adjusted_last_year_from_growth_and_pe(self):
+        # Agilent: consensus 6.20 for 2026, expected growth 10.87%, P/E 30.94 on 2025 actual and 27.90 on 2026.
+        parsed = nasdaq.parse_growth(fakes.growth_payload(2026, growth=10.87, pe_actual=30.94, pe_estimate=27.9))
+        estimates = {"2026": [6.2, 8], "2027": [6.75, 8]}
+        self.assertEqual(nasdaq.adjusted_last_year(parsed, estimates), ("2025", 5.592))
+
+    def test_adjusted_last_year_with_only_one_route(self):
+        parsed = nasdaq.parse_growth(fakes.growth_payload(2027, growth=9.19, pe_actual=0.0, pe_estimate=0.0))   # no P/Es published
+        self.assertEqual(nasdaq.adjusted_last_year(parsed, {"2027": [1.67, 6]}), ("2026", 1.529))
+        falling = nasdaq.parse_growth(fakes.growth_payload(2026, growth=-56.19, pe_actual=11.67, pe_estimate=26.64))
+        self.assertEqual(nasdaq.adjusted_last_year(falling, {"2026": [2.97, 3]})[0], "2025")
+        self.assertAlmostEqual(nasdaq.adjusted_last_year(falling, {"2026": [2.97, 3]})[1], 6.78, places=2)
+
+    def test_adjusted_last_year_is_withheld_when_unsure(self):
+        parsed = nasdaq.parse_growth(fakes.growth_payload(2026, growth=10.0, pe_actual=40.0, pe_estimate=20.0))
+        self.assertIsNone(nasdaq.adjusted_last_year(parsed, {"2026": [6.0, 5]}))     # the two routes disagree
+        good = nasdaq.parse_growth(fakes.growth_payload(2026))
+        self.assertIsNone(nasdaq.adjusted_last_year(good, {"2027": [6.0, 5]}))       # no estimate for the first year
+        self.assertIsNone(nasdaq.adjusted_last_year(good, None))
+        self.assertIsNone(nasdaq.adjusted_last_year(None, {"2026": [6.0, 5]}))
+        self.assertIsNone(nasdaq.adjusted_last_year(good, {"2026": [-0.5, 5]}))      # growth from a loss means nothing
+        collapsing = nasdaq.parse_growth(fakes.growth_payload(2026, growth=-99.0, pe_actual=0, pe_estimate=0))
+        self.assertIsNone(nasdaq.adjusted_last_year(collapsing, {"2026": [0.1, 2]}))
 
     def test_screener(self):
         listing = nasdaq.parse_screener(fakes.screener_payload({

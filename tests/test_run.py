@@ -84,7 +84,11 @@ class HealthyRunTest(PipelineCase):
         self.assertEqual(a["src"], {"country": "wb", "sector": "y", "industry": "y"})
         self.assertEqual(a["eps_a"]["2025"], 5.2)
         self.assertEqual(a["eps_e"]["2026"], [6.0, 8])
+        self.assertEqual(a["eps_adj"], {"2025": 5.0})        # 6.00 estimate / 1.20 expected growth
         self.assertEqual(a["f"], 9)
+        self.assertAlmostEqual(a["dy"], 0.01)                # from the per-share dividend history ...
+        self.assertAlmostEqual(a["dy_cf"], 55 / 2500.0)      # ... the cash-flow figure is kept alongside
+        self.assertNotIn("dy_src", a)
         self.assertNotIn("st", a)
 
         b = self.row(WEEK1, "BBB")                    # reports in EUR
@@ -92,8 +96,9 @@ class HealthyRunTest(PipelineCase):
         self.assertAlmostEqual(b["eps_a"]["2025"], 5.72, places=2)
 
         c = self.row(WEEK1, "CCCCY")                  # OTC: no Nasdaq coverage, never even asked
-        self.assertEqual(c["st"], {"e": "n", "n": "n"})
+        self.assertEqual(c["st"], {"e": "n", "a": "n", "n": "n"})
         self.assertEqual(c["exch"], "OTC")
+        self.assertNotIn("eps_adj", c)
         self.assertEqual(c["country"], "Japan")
         self.assertEqual(self.net.count("/analyst/CCCCY/"), 0)
 
@@ -233,7 +238,9 @@ class OutageTest(PipelineCase):
         status = self.status()
         self.assertEqual(status["overall"], "degraded")
         self.assertEqual(self.source("e")["status"], "down")
+        self.assertEqual(self.source("a")["status"], "down")
         self.assertEqual(self.source("n")["status"], "down")
+        self.assertEqual(self.row(WEEK2, "AAA")["eps_adj"], {"2025": 5.0})     # last week's figure kept
         a = self.row(WEEK2, "AAA")
         self.assertEqual(a["eps_e"]["2026"], [6.0, 8])                    # carried
         self.assertEqual(a["st"]["e"], "s:2026-11-13")
@@ -320,6 +327,26 @@ class CrashTest(PipelineCase):
         self.assertEqual(self.row(WEEK1, "BBB")["st"]["q"], "m")
         self.assertEqual(self.row(WEEK1, "AAA")["price"], 100.0)
         self.assertIn("internal error", json.dumps(self.source("q")["errors"]))
+
+
+class SchemaUpgradeTest(PipelineCase):
+    def test_a_newly_added_dataset_is_filled_in_on_the_next_run(self):
+        self.go(WEEK1)
+        snap = self.snap(WEEK1)
+        for row in snap["rows"]:                       # pretend the snapshot predates the adjusted-EPS feed
+            row.pop("eps_adj", None)
+            (row.get("st") or {}).pop("a", None)
+        snapshot.write_json(snapshot.snapshot_path(WEEK1), snap)
+        chart_calls, growth_calls = self.net.count("/v8/finance/chart/AAA"), self.net.count("/peg-ratio")
+        self.go(WEEK1)
+        self.assertEqual(self.row(WEEK1, "AAA")["eps_adj"], {"2025": 5.0})
+        self.assertEqual(self.row(WEEK1, "CCCCY")["st"]["a"], "n")
+        self.assertEqual(self.net.count("/v8/finance/chart/AAA"), chart_calls)     # nothing else was fetched again
+        self.assertGreater(self.net.count("/peg-ratio"), growth_calls)
+        self.assertEqual(self.status()["mode"], "retry")
+        calls = len(self.net.calls)
+        self.go(WEEK1)                                                             # and then it settles
+        self.assertEqual(len(self.net.calls), calls)
 
 
 class UniverseChangeTest(PipelineCase):

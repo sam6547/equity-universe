@@ -173,11 +173,17 @@ def refresh(args, started):
             out["f"] = guarded(yahoo.fetch_timeseries, client, symbol, as_of)
         if "p" in todo:
             out["p"] = guarded(yahoo.fetch_profile, client, symbol)
+        listed = is_listed(symbol, out.get("q")) if ("e" in todo or "a" in todo) else False
         if "e" in todo:
-            if is_listed(symbol, out.get("q")):
+            if listed:
                 out["e"] = guarded(nasdaq.fetch_forecast, client, symbol)
             else:
                 out["e"] = Result.no_data("OTC-traded: not covered by Nasdaq analyst forecasts")
+        if "a" in todo:
+            if listed:
+                out["a"] = guarded(nasdaq.fetch_growth, client, symbol)
+            else:
+                out["a"] = Result.no_data("OTC-traded: not covered by Nasdaq analyst forecasts")
         return symbol, out
 
     results = {}
@@ -250,6 +256,15 @@ def refresh(args, started):
                 outcome = guarded(build_fundamentals, outcome.data, as_of, row, books, fx_failed)
             note(errors, "f", symbol, outcome)
             snapshot.apply_result(row, "f", outcome, p.base, p.base_as_of)
+
+        if "a" in out:
+            outcome = out["a"]
+            if outcome.is_ok:      # needs this row's estimates (fresh or carried) to turn growth into a figure
+                found = nasdaq.adjusted_last_year(outcome.data, row.get("eps_e"))
+                outcome = Result.ok({"eps_adj": {found[0]: found[1]}}) if found else \
+                    Result.no_data("Nasdaq's figures do not pin down last year's adjusted EPS for this symbol")
+            note(errors, "a", symbol, outcome)
+            snapshot.apply_result(row, "a", outcome, p.base, p.base_as_of)
 
         snapshot.resolve_identity(row, u)
 

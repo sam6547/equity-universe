@@ -63,7 +63,8 @@ def timeseries_payload(series):
     return {"timeseries": {"result": result, "error": None}}
 
 
-def company_series(as_of, currency="USD", eps=(4.0, 4.4, 4.8, 5.2), scale=1.0, with_retained=True, fy_month_end="12-31"):
+def company_series(as_of, currency="USD", eps=(4.0, 4.4, 4.8, 5.2), scale=1.0, with_retained=True, fy_month_end="12-31",
+                   with_equity=False):
     """A plain industrial company: four fiscal years plus trailing and valuation points."""
     year = as_of.year - 1
     fy = ["%d-%s" % (year - 3 + i, fy_month_end) for i in range(4)]
@@ -108,7 +109,15 @@ def company_series(as_of, currency="USD", eps=(4.0, 4.4, 4.8, 5.2), scale=1.0, w
         "trailingPeRatio": [(val, 18.5, None)],
         "trailingForwardPeRatio": [(val, 16.0, None)],
         "trailingPegRatio": [(val, 1.6, None)],
+        "annualCashDividendsPaid": annual([-40, -44, -48, -52]),
+        "trailingCashDividendsPaid": [(q, -55 * scale, currency)],
     }
+    if with_equity:
+        out["annualStockholdersEquity"] = annual([1100, 1150, 1200, 1250])
+        out["quarterlyStockholdersEquity"] = [(q, 1290 * scale, currency)]
+        out["quarterlyCapitalStock"] = [(q, 100 * scale, currency)]
+        out["quarterlyAdditionalPaidInCapital"] = [(q, 300 * scale, currency)]
+        out["quarterlyTreasuryStock"] = [(q, 50 * scale, currency)]
     if with_retained:
         out["annualRetainedEarnings"] = annual([500, 560, 620, 690])
         out["quarterlyRetainedEarnings"] = [(q, 720 * scale, currency)]
@@ -124,6 +133,19 @@ def forecast_payload(first_year, eps=(6.0, 6.6, 7.3, 8.1), month="Dec"):
              "noOfEstimates": 8 - 2 * i, "up": 0, "down": 0} for i, v in enumerate(eps)]
     return {"data": {"symbol": "x", "yearlyForecast": {"rows": rows}, "quarterlyForecast": {"rows": []}},
             "message": None, "status": {"rCode": 200}}
+
+
+def growth_payload(first_estimate_year, growth=20.0, pe_actual=24.0, pe_estimate=20.0):
+    """Nasdaq forecast P/E data: last year's P/E on actual earnings, then on estimates, plus expected growth."""
+    return {"data": {
+        "pegr": {"pegValue": 1.2},
+        "per": {"peRatioChart": [{"x": "%d Actual" % (first_estimate_year - 1), "y": pe_actual},
+                                 {"x": "%d Estimates" % first_estimate_year, "y": pe_estimate},
+                                 {"x": "%d Estimates" % (first_estimate_year + 1), "y": pe_estimate * 0.9}]},
+        "gr": {"peGrowthChart": [{"z": "Growth", "x": str(first_estimate_year), "y": growth},
+                                 {"z": "Growth", "x": str(first_estimate_year + 1), "y": 10.0},
+                                 {"z": "P/E Ratios", "x": str(first_estimate_year), "y": pe_estimate}]},
+    }, "message": None, "status": {"rCode": 200}}
 
 
 FORECAST_UNKNOWN = {"data": None, "message": None,
@@ -228,6 +250,8 @@ class Internet(object):
             symbol = path.split("/analyst/")[1].split("/")[0]
             if symbol in self.otc or symbol in self.unknown:
                 return js(FORECAST_UNKNOWN)
+            if path.endswith("/peg-ratio"):
+                return js(growth_payload(self.as_of.year))
             return js(forecast_payload(self.as_of.year))
         if host == "home.treasury.gov":
             if "treasury" in self.down:

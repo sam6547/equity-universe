@@ -130,7 +130,8 @@ def dividend_metrics(payments, as_of, price):
     365-day window: companies that pay once a year move their date by a few weeks, and a
     strict window then counts zero or two payments.
     """
-    out = {"ttm": 0.0, "freq": None, "yield": None, "growth5": None, "last": None, "status": "none", "check": False}
+    out = {"ttm": 0.0, "freq": None, "yield": None, "growth5": None, "growth_stale": False, "last": None,
+           "status": "none", "check": False}
     # status: paying | lapsed | gap (yield unknown) | none (yield 0)
     pays = [(d, a) for d, a in payments if d <= as_of and is_num(a) and a > 0]
     if not pays:
@@ -171,7 +172,13 @@ def dividend_metrics(payments, as_of, price):
     if out["yield"] is not None and out["yield"] > 0.25:
         out["check"] = True
 
-    if not lapsed and ttm > 0:
+    # Growth is measured between the latest year of payments and the year five years before it.
+    # When the source's history simply stops ("gap"), the same sum is still worth showing as long
+    # as the caller says how old it is.
+    latest_year = ttm if not lapsed else sum(a for d, a in pays if d > last_date - window)
+    if latest_year > 0 and (not lapsed or out["status"] == "gap"):
+        ttm_for_growth = latest_year
+        out["growth_stale"] = lapsed
         target = last_date - dt.timedelta(days=1826)
         half_gap = dt.timedelta(days=gap / 2.0)
         earlier = [d for d, _ in pays if d <= target + half_gap]
@@ -179,8 +186,11 @@ def dividend_metrics(payments, as_of, price):
             anchor = earlier[-1]
             if abs((anchor - target).days) <= gap / 2.0 + 45:
                 base = sum(a for d, a in pays if anchor - window < d <= anchor)
-                rate = cagr(base, ttm, (last_date - anchor).days / 365.25)
-                if rate is not None and -0.95 < rate < 10:
+                rate = cagr(base, ttm_for_growth, (last_date - anchor).days / 365.25)
+                # A history that already has holes is only trusted if both years hold the same number of payments.
+                complete = not lapsed or (sum(1 for d, _ in pays if anchor - window < d <= anchor) ==
+                                          sum(1 for d, _ in pays if d > last_date - window))
+                if rate is not None and -0.95 < rate < 10 and complete:
                     out["growth5"] = round(rate, 6)
     return out
 

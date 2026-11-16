@@ -28,10 +28,12 @@ Point = collections.namedtuple("Point", "date value currency")
 _ANNUAL = ["TotalRevenue", "GrossProfit", "EBIT", "NetIncome", "NetIncomeCommonStockholders", "DilutedEPS", "BasicEPS",
            "OperatingCashFlow", "FreeCashFlow", "TotalAssets", "CurrentAssets", "CurrentLiabilities",
            "TotalLiabilitiesNetMinorityInterest", "RetainedEarnings", "LongTermDebt", "OrdinarySharesNumber",
-           "DilutedAverageShares", "WorkingCapital", "EBITDA", "NormalizedEBITDA"]
+           "DilutedAverageShares", "WorkingCapital", "EBITDA", "NormalizedEBITDA",
+           "CashDividendsPaid", "StockholdersEquity", "CapitalStock", "AdditionalPaidInCapital", "TreasuryStock"]
 _QUARTERLY = ["TotalAssets", "CurrentAssets", "CurrentLiabilities", "TotalLiabilitiesNetMinorityInterest",
-              "RetainedEarnings", "WorkingCapital"]
-_TRAILING = ["TotalRevenue", "EBIT", "EBITDA", "NormalizedEBITDA", "FreeCashFlow", "DilutedEPS",
+              "RetainedEarnings", "WorkingCapital", "StockholdersEquity", "CapitalStock", "AdditionalPaidInCapital",
+              "TreasuryStock"]
+_TRAILING = ["TotalRevenue", "EBIT", "EBITDA", "NormalizedEBITDA", "FreeCashFlow", "DilutedEPS", "CashDividendsPaid",
              "MarketCap", "EnterpriseValue", "PeRatio", "ForwardPeRatio", "PegRatio"]
 TS_TYPES = (["annual" + t for t in _ANNUAL] + ["quarterly" + t for t in _QUARTERLY] + ["trailing" + t for t in _TRAILING])
 
@@ -155,6 +157,8 @@ def quote_fields(meta, bars, divs, as_of):
     out["div_ttm"] = compute.round_sig(dm["ttm"], 6)
     if dm["growth5"] is not None:
         out["dg5"] = dm["growth5"]
+        if dm["growth_stale"]:
+            out["dg5_old"] = 1  # measured up to the last payment on record, which is over a year ago
     if dm["freq"]:
         out["div_freq"] = dm["freq"]
     if dm["last"]:
@@ -429,21 +433,48 @@ def fundamentals_fields(series, as_of, price=None, trade_currency="USD", fx=None
             return pt.value
         return _near(series.get("annual" + item), fy[-1]) if fy and (as_of - fy[-1]).days <= 500 else None
 
+    # ---- dividends from the cash-flow statement ----------------------
+    # Total cash paid to shareholders / market value. Used when the per-share dividend history has holes
+    # (Yahoo's history for many ADRs stops in 2025); a company-level ratio, so no ADR-ratio pitfalls.
+    paid, paid_basis = None, None
+    pt = _latest(series.get("trailingCashDividendsPaid"), as_of, max_age_days=220)
+    if pt:
+        paid, paid_basis = pt, "TTM"
+    elif fy and (as_of - fy[-1]).days <= 500:
+        value = _near(series.get("annualCashDividendsPaid"), fy[-1])
+        if value is not None:
+            paid, paid_basis = Point(fy[-1], value, rep_raw), "FY"
+    if paid is not None and mcap:
+        paid_trade = conv_avg(abs(paid.value), paid.date)
+        if paid_trade is not None and 0 <= paid_trade / mcap < 0.5:
+            out["dy_cf"] = round(paid_trade / mcap, 6)
+            out["dy_cf_b"] = "%s %s" % (paid_basis, paid.date.isoformat())
+
     wc = balance("WorkingCapital")
     if wc is None:
         ca, cl = balance("CurrentAssets"), balance("CurrentLiabilities")
         wc = ca - cl if ca is not None and cl is not None else None
+    # Companies reporting under IFRS often have no separate retained-earnings line in this feed.
+    # Fall back to everything in equity that is not paid-in capital (retained earnings plus reserves).
+    retained, retained_estimated = balance("RetainedEarnings"), False
+    if retained is None:
+        equity, capital = balance("StockholdersEquity"), balance("CapitalStock")
+        if equity is not None and capital is not None:
+            retained = equity - capital - (balance("AdditionalPaidInCapital") or 0.0) + (balance("TreasuryStock") or 0.0)
+            retained_estimated = True
     mve = None
     if mcap is not None:
         if not converted:
             mve = mcap
         elif spot:
             mve = mcap / (spot * scale)   # market value expressed in the reporting currency
-    z, parts, missing = compute.altman_z(wc, balance("TotalAssets"), balance("RetainedEarnings"), flow("EBIT"),
+    z, parts, missing = compute.altman_z(wc, balance("TotalAssets"), retained, flow("EBIT"),
                                          mve, balance("TotalLiabilitiesNetMinorityInterest"), flow("TotalRevenue"))
     if z is not None:
         out["z"] = z
         out["zx"] = parts
+        if retained_estimated:
+            out["z_est"] = 1   # retained earnings approximated by total reserves
     elif missing:
         out["z_miss"] = missing
 

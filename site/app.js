@@ -32,11 +32,20 @@
     f: { label: 'Fundamentals & valuation', source: 'Yahoo Finance', none: 'Yahoo Finance has no financial statements for this symbol' },
     p: { label: 'Sector & industry', source: 'Yahoo Finance', none: 'Yahoo Finance lists no sector for this symbol' },
     e: { label: 'EPS estimates', source: 'Nasdaq', none: 'Not covered - Nasdaq publishes analyst forecasts for exchange-listed stocks only' },
+    a: { label: 'Adjusted EPS, last fiscal year', source: 'Nasdaq', none: 'Not available - Nasdaq publishes analyst figures for exchange-listed stocks only' },
     n: { label: 'Listing & country', source: 'Nasdaq', none: 'Not listed on NYSE or Nasdaq' }
   };
 
   var UNIT_NOTE = 'Check before relying on this: the per-share figures for this ticker do not reconcile with Yahoo\u2019s own P/E (a one-off item, or an ADR-ratio or currency mismatch in the source).';
   var DIV_NOTE = 'Check before relying on this: the last 12 months of dividends look very different from the year before (a one-off special payment, or holes in Yahoo\u2019s dividend history).';
+  var Z_EST_NOTE = 'This company does not report retained earnings separately in the source, so total reserves (equity less paid-in capital) were used. That tends to raise the score slightly.';
+  function cfYieldNote(row) {
+    return 'From the cash-flow statement: dividends paid (' + (row.dy_cf_b ? basisWords(row.dy_cf_b) : 'latest year') + ') \u00f7 market value. Used because Yahoo\u2019s per-share dividend history for this ticker stops on ' +
+      (row.div_last ? fmtDay(row.div_last) : 'an earlier date') + '.';
+  }
+  function oldGrowthNote(row) {
+    return 'Measured up to the last dividend on record (' + (row.div_last ? fmtDay(row.div_last) : 'over a year ago') + '). Yahoo has nothing more recent for this ticker.';
+  }
   var STATUS_WORDS = { ok: 'Healthy', degraded: 'Needs a look', failed: 'Failing', down: 'Down', stale: 'Out of date', missing: 'Missing' };
   var F_TESTS = ['Positive net income', 'Positive operating cash flow', 'Return on assets improved', 'Cash flow exceeds net income',
     'Long-term debt ratio fell', 'Current ratio improved', 'No new shares issued', 'Gross margin improved', 'Asset turnover improved'];
@@ -125,6 +134,10 @@
     if (row.eps_e && row.eps_e[year]) return { v: row.eps_e[year][0], kind: 'e', n: row.eps_e[year][1] };
     return null;
   }
+  function adjEps(row) {
+    var years = Object.keys(row.eps_adj || {});
+    return years.length ? { year: years[0], v: row.eps_adj[years[0]] } : null;
+  }
   function stCode(row, ds) { return (row.st && row.st[ds]) || ''; }
   function isStale(row, ds) { return stCode(row, ds).indexOf('s:') === 0; }
   function hasIssue(row) {
@@ -155,6 +168,8 @@
         title: 'Earnings per share for the fiscal year ending in ' + y + '. Upright = reported (GAAP diluted). Italic = analyst consensus.' });
     });
     cols.push(
+      { key: 'eps_adj', label: 'Last FY adj.', group: 'eps', ds: 'a', adj: true,
+        title: 'The latest reported fiscal year\u2019s EPS on the analysts\u2019 (adjusted) basis - the like-for-like starting point for the estimates. Exchange-listed tickers only.' },
       { key: 'feps', label: 'Next FY*', group: 'eps', ds: 'f', fmt: function (v) { return fmtNum(v, 2); }, est: true,
         title: 'Next-fiscal-year consensus EPS implied by Yahoo’s forward P/E (price ÷ forward P/E). Covers OTC tickers that have no Nasdaq forecast.' },
       { key: 'mcap', label: 'Market cap', group: 'val', ds: 'f', fmt: function (v, r) { return fmtMoney(v, cur(r)); } },
@@ -179,6 +194,7 @@
   }
   function sortValue(row, col) {
     if (col.eps) { var e = epsAt(row, col.eps); return e ? e.v : null; }
+    if (col.adj) { var a = adjEps(row); return a ? a.v : null; }
     var v = get(row, col.key);
     return v == null || v === '' ? null : v;
   }
@@ -508,6 +524,15 @@
           if (row.unit_flag) { check = true; title += '\n' + UNIT_NOTE; }
         } else manual = e.note || '';
       }
+    } else if (c.adj) {
+      var adj = adjEps(row);
+      if (!adj) { cls.push('na'); kids.push('\u2014'); }
+      else {
+        kids.push(fmtNum(adj.v, 2));
+        title = 'Fiscal ' + adj.year + ', analysts\u2019 (adjusted) basis \u00b7 worked out from Nasdaq\u2019s forecast growth figures';
+        stale = isStale(row, 'a');
+        if (stale) title += '\n' + staleTitle(row, 'a');
+      }
     } else {
       var o = override(row, c.key);
       var v = o ? o[0] : row[c.key];
@@ -516,7 +541,7 @@
       if (text == null) {
         cls.push('na');
         kids.push('—');
-        if (c.key === 'dy' && row.div_gap) title = 'Yahoo has no dividend on record since ' + fmtDay(row.div_last) + ', so no yield is shown (the company may still be paying).';
+        if (c.key === 'dy' && row.div_gap) title = 'Yahoo has no dividend on record since ' + fmtDay(row.div_last) + ' and none in the cash-flow statement, so no yield is shown (the company may still be paying).';
         else if (c.key === 'z' && row.z_miss) title = 'Cannot be calculated: the source has no ' + row.z_miss.join(', ') + ' for this company.';
         else if (c.key === 'f' && row.ft) title = 'Only ' + row.ft.replace(/-/g, '').length + ' of the 9 tests can be calculated for this company.';
       } else {
@@ -532,6 +557,9 @@
         if (c.key === 'price' && row.plag) title = 'No trade in the reported week: this is the close from ' + row.plag + ' week' + (row.plag > 1 ? 's' : '') + ' earlier.';
         if (c.key === 'dy' && row.div_lapsed) title = 'Payments have slowed or stopped: this counts only what was paid in the last 12 months.';
         if ((c.key === 'dy' || c.key === 'dg5') && row.div_odd && !o) { check = true; title = DIV_NOTE; }
+        if (!o && c.key === 'dy' && row.dy_src === 'cf') { cls.push('alt'); title = cfYieldNote(row); }
+        if (!o && c.key === 'dg5' && row.dg5_old) { cls.push('alt'); title = oldGrowthNote(row); }
+        if (!o && c.key === 'z' && row.z_est) { cls.push('alt'); title = (title ? title + '\n' : '') + Z_EST_NOTE; }
         if (c.key === 'mcap' && row.mcap_src === 'nq') title = 'From Nasdaq (Yahoo had no figure)';
         if (c.ds && !o && isStale(row, c.ds) && !(c.key === 'name' && !row.yname)) {
           stale = true;
@@ -581,7 +609,7 @@
     var asOfYear = +snap.as_of.slice(0, 4);
     var head = ['Country', 'Sector', 'Industry', 'Symbol', 'Company Name', 'Price', 'CAGR of S&P 500', '10 Yr Treasury Yield', 'Inflation (CPI)']
       .concat(years.map(function (y) { return y + ' EPS' + (y >= asOfYear ? ' (estimate)' : ''); }))
-      .concat(['Next FY EPS (implied)', 'Market Capitalization', 'Enterprise Value', 'EBITDA', 'Free Cash Flow', 'Exchange', 'Dividend Yield',
+      .concat(['Last FY EPS (adjusted)', 'Next FY EPS (implied)', 'Market Capitalization', 'Enterprise Value', 'EBITDA', 'Free Cash Flow', 'Exchange', 'Dividend Yield',
         '5 Year Dividend Growth Rate', 'Altman Z-Score', 'Piotroski F-Score', 'Week Ending', 'Notes']);
     var sp = m.sp500 && m.sp500.headline ? m.sp500.headline.value : '';
     var lines = [head];
@@ -595,14 +623,18 @@
       if (r.ovr) notes.push('Typed in by hand: ' + Object.keys(r.ovr).join(' '));
       if (r.unit_flag) notes.push('Check per-share figures against the source');
       if (r.div_odd) notes.push('Check dividend figures against the source');
-      if (r.div_gap) notes.push('No dividend on record at Yahoo since ' + r.div_last);
+      if (r.dy_src === 'cf') notes.push('Dividend yield from the cash-flow statement');
+      else if (r.div_gap) notes.push('No dividend on record at Yahoo since ' + r.div_last);
+      if (r.dg5_old) notes.push('Dividend growth measured to ' + r.div_last);
+      if (r.z_est) notes.push('Z-score uses total reserves for retained earnings');
+      if (adjEps(r)) notes.push('Adjusted EPS is for fiscal ' + adjEps(r).year);
       if (r.plag) notes.push('Price is ' + r.plag + ' week(s) old');
       var kinds = years.map(function (y) { var e = epsAt(r, y); return e ? e.kind : ''; });
       if (kinds.some(function (k, i) { return k === 'a' && years[i] >= asOfYear; })) notes.push('Reported EPS through ' + years[kinds.lastIndexOf('a')]);
       lines.push([get(r, 'country'), get(r, 'sector'), get(r, 'industry'), r.s, get(r, 'name'), get(r, 'price'), sp,
         m.treasury_10y ? +(m.treasury_10y.value / 100).toFixed(6) : '', m.cpi ? m.cpi.yoy : '']
         .concat(years.map(function (y) { var e = epsAt(r, y); return e ? e.v : ''; }))
-        .concat([get(r, 'feps'), get(r, 'mcap'), get(r, 'ev'), get(r, 'ebitda'), get(r, 'fcf'), get(r, 'exch'), get(r, 'dy'), get(r, 'dg5'),
+        .concat([adjEps(r) ? adjEps(r).v : '', get(r, 'feps'), get(r, 'mcap'), get(r, 'ev'), get(r, 'ebitda'), get(r, 'fcf'), get(r, 'exch'), get(r, 'dy'), get(r, 'dg5'),
           get(r, 'z'), get(r, 'f'), snap.as_of, notes.join('; ')]));
     });
     var csv = lines.map(function (line) {
@@ -754,7 +786,8 @@
     table.appendChild(tb);
     d.appendChild(table);
     d.appendChild(kv([
-      ['Last twelve months', fmtNum(row.eps_ttm, 2)],
+      (function () { var a = adjEps(row); return a ? ['Fiscal ' + a.year + ', adjusted', fmtNum(a.v, 2), 'analysts\u2019 basis (Nasdaq) - compare with the estimates'] : null; })(),
+      ['Last twelve months', fmtNum(row.eps_ttm, 2), row.eps_ttm != null ? 'GAAP' : null],
       ['P/E · forward P/E', (fmtNum(row.pe, 1) || '—') + ' · ' + (fmtNum(row.fpe, 1) || '—')],
       ['Next-year EPS implied', fmtNum(get(row, 'feps'), 2), row.feps != null ? 'price ÷ Yahoo forward P/E' : null],
       row.fy_end ? ['Latest fiscal year ended', fmtDay(row.fy_end)] : null
@@ -781,9 +814,12 @@
     d.appendChild(kv([
       ['Yield', fmtPct(get(row, 'dy'), 2), row.div_ttm ? fmtNum(row.div_ttm, 3) + ' ' + cur + ' paid in the last 12 months' : null],
       ['5-year growth', fmtSigned(get(row, 'dg5'), 1), row.dg5 != null ? 'a year' : null],
-      ['Paid', freq, row.div_last ? 'last ex-dividend date ' + fmtDay(row.div_last) : null]
+      ['Paid', freq, row.div_last ? 'last ex-dividend date ' + fmtDay(row.div_last) : null],
+      row.dy_cf != null && row.dy_src !== 'cf' ? ['Cross-check', fmtPct(row.dy_cf, 2), 'dividends paid per the cash-flow statement \u00f7 market value'] : null
     ]));
-    if (row.div_gap) d.appendChild(h('p', { class: 'fine', text: 'Yahoo has no dividend on record since ' + fmtDay(row.div_last) + ', so no yield is shown. The company may still be paying - Yahoo’s history for some ADRs has gaps.' }));
+    if (row.dy_src === 'cf') d.appendChild(h('p', { class: 'fine', text: cfYieldNote(row) }));
+    if (row.dg5_old) d.appendChild(h('p', { class: 'fine', text: '5-year growth: ' + oldGrowthNote(row) }));
+    if (row.div_gap && row.dy == null) d.appendChild(h('p', { class: 'fine', text: 'Yahoo has no dividend on record since ' + fmtDay(row.div_last) + ' and no dividend figure in the cash-flow statement, so no yield is shown. The company may still be paying.' }));
     if (row.div_odd) d.appendChild(h('p', { class: 'fine', text: DIV_NOTE }));
     if (row.div_lapsed) d.appendChild(h('p', { class: 'fine', text: 'Payments have slowed or stopped; the yield counts only what was paid in the last 12 months.' }));
 
@@ -799,6 +835,7 @@
       d.appendChild(h('p', { class: 'fine', text: 'Z = 1.2×' + row.zx[0] + ' + 1.4×' + row.zx[1] + ' + 3.3×' + row.zx[2] + ' + 0.6×' + row.zx[3] + ' + 1.0×' + row.zx[4] +
         '  (' + Z_PARTS.map(function (p) { return p.toLowerCase(); }).join('; ') + ')' }));
     }
+    if (row.z_est) d.appendChild(h('p', { class: 'fine', text: Z_EST_NOTE }));
     if (row.ft) {
       var ul = h('ul', { class: 'tests' });
       row.ft.split('').forEach(function (t, i) {
@@ -983,7 +1020,7 @@
 
     // coverage meters
     var cov = st.coverage || {};
-    var labels = { price: 'Price', country: 'Country', sector: 'Sector', industry: 'Industry', exch: 'Exchange', eps_a: 'EPS (reported)', eps_e: 'EPS estimates',
+    var labels = { price: 'Price', country: 'Country', sector: 'Sector', industry: 'Industry', exch: 'Exchange', eps_a: 'EPS (reported)', eps_adj: 'EPS, adjusted (last year)', eps_e: 'EPS estimates',
       mcap: 'Market cap', ev: 'Enterprise value', ebitda: 'EBITDA', fcf: 'Free cash flow', dy: 'Dividend yield', dg5: '5-year dividend growth', z: 'Altman Z', f: 'Piotroski F' };
     if (Object.keys(cov).length) {
       var covCard = h('div', { class: 'card' }, h('h2', { text: 'How much of each column is filled in' }),
@@ -1003,12 +1040,13 @@
     // sources that cannot be automated + run log
     var two = h('div', { class: 'two' });
     if ((st.unavailable || []).length) {
-      var un = h('div', { class: 'card' }, h('h2', { text: 'Workbook sources a scheduled job cannot read' }),
-        h('p', { class: 'lead', text: 'These sites only serve people using a browser. Nothing is wrong on our side; this is what is used in their place.' }));
+      var un = h('div', { class: 'card' }, h('h2', { text: 'What this dashboard cannot show, and why' }),
+        h('p', { class: 'lead', text: 'Some of the workbook\u2019s sources only serve people using a browser, and some figures are not published anywhere open. Nothing here is a fault to fix; it is the standing list of gaps and what stands in for each.' }));
       st.unavailable.forEach(function (u) {
         un.appendChild(h('div', { style: 'margin-top:10px' }, badge('blocked', u.name),
           h('div', { class: 'what', text: 'Wanted: ' + u.wanted }), h('div', { class: 'what', text: 'Why not: ' + u.reason }),
-          h('div', { class: 'what', text: 'Used instead: ' + u.instead })));
+          h('div', { class: 'what', text: 'Shown instead: ' + u.instead }),
+          u.option ? h('div', { class: 'what', text: 'To get the original: ' + u.option }) : null));
       });
       un.appendChild(h('p', { class: 'fine', text: 'A figure you would rather take from one of these pages can be typed into overrides.csv; it then shows with a ✎ mark.' }));
       two.appendChild(un);

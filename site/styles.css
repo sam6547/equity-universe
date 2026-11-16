@@ -152,6 +152,7 @@ main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .mark { font-size: 11px; color: var(--ink-2); }
 .stale-mark { color: #9a6a00; }
 .check-mark { font-weight: 700; color: var(--down); }
+td.alt, .alt-key { text-decoration: underline dotted; text-decoration-color: var(--muted); text-underline-offset: 3px; }
 @media (prefers-color-scheme: dark) { .stale-mark { color: var(--warning); } }
 
 /* ---------- table ---------- */

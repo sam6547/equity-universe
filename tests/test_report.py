@@ -105,6 +105,57 @@ class RecordFailureTest(unittest.TestCase):
             self.assertEqual(report.main(["--issue"]), 0)
 
 
+class DividendFallbackTest(unittest.TestCase):
+    URow = {"name": "Toyota", "country": "JAPAN", "sector": "", "industry": ""}
+
+    def test_statement_yield_fills_a_gap_and_is_labelled(self):
+        row = {"s": "TM", "price": 213.0, "div_gap": 1, "dy_cf": 0.0326, "st": {}}
+        snapshot.resolve_identity(row, self.URow)
+        self.assertEqual((row["dy"], row["dy_src"]), (0.0326, "cf"))
+
+    def test_fallback_is_dropped_once_the_history_is_back(self):
+        row = {"s": "TM", "price": 213.0, "div_gap": 1, "dy_cf": 0.0326, "st": {}}
+        snapshot.resolve_identity(row, self.URow)
+        snapshot.set_fresh(row, "q", {"price": 213.0, "dy": 0.031})     # a retry fetched the real history
+        snapshot.resolve_identity(row, self.URow)
+        self.assertEqual(row["dy"], 0.031)
+        self.assertNotIn("dy_src", row)
+        self.assertNotIn("div_gap", row)
+
+    def test_carrying_last_week_does_not_pass_off_a_fallback_as_fetched(self):
+        last_week = {"s": "TM", "price": 213.0, "div_gap": 1, "dy_cf": 0.0326, "st": {}}
+        snapshot.resolve_identity(last_week, self.URow)
+        self.assertEqual(last_week["dy_src"], "cf")
+        row = {"s": "TM", "st": {}}
+        snapshot.carry(row, "q", last_week, "2026-11-13")              # this week's price fetch failed
+        snapshot.set_fresh(row, "f", {"dy_cf": 0.035, "mcap": 250e9})   # ... but fundamentals are fresh
+        snapshot.resolve_identity(row, self.URow)
+        self.assertEqual(row["st"]["q"], "s:2026-11-13")
+        self.assertEqual((row["dy"], row["dy_src"]), (0.035, "cf"))     # re-derived from this week's statement figure
+
+    def test_fresh_market_cap_replaces_a_fallback_one(self):
+        row = {"s": "TM", "nmcap": 2.5e11, "st": {}}
+        snapshot.resolve_identity(row, self.URow)
+        self.assertEqual((row["mcap"], row["mcap_src"]), (250000000000, "nq"))
+        snapshot.set_fresh(row, "f", {"mcap": 2.6e11})
+        snapshot.resolve_identity(row, self.URow)
+        self.assertEqual(row["mcap"], 2.6e11)
+        self.assertNotIn("mcap_src", row)
+
+    def test_fallback_is_redecided_each_pass(self):
+        row = {"s": "TM", "price": 213.0, "dy_cf": 0.0326, "st": {}}
+        snapshot.resolve_identity(row, self.URow)
+        row["dy_cf"] = 0.04                                   # fundamentals refreshed later in the week
+        row.setdefault("st", {})
+        snapshot.resolve_identity(row, self.URow)
+        self.assertEqual((row["dy"], row["dy_src"]), (0.04, "cf"))
+
+    def test_no_fallback_without_a_price_feed(self):
+        row = {"s": "XX", "dy_cf": 0.03, "st": {"q": "m"}}
+        snapshot.resolve_identity(row, self.URow)
+        self.assertNotIn("dy", row)
+
+
 class OverridesFileTest(unittest.TestCase):
     def test_comment_and_blank_lines_are_ignored(self):
         tmp = tempfile.mkdtemp(prefix="dash-ovr-")

@@ -23,24 +23,58 @@ SOURCES = (
     {"id": "e", "label": "EPS estimates", "source": "Nasdaq (analyst earnings forecast)", "critical": False,
      "fields": "Consensus EPS for the next 3-4 fiscal years, exchange-listed stocks only",
      "fix": "Check api.nasdaq.com is up; see pipeline/sources/nasdaq.py (parse_forecast) if the format changed."},
+    {"id": "a", "label": "Adjusted EPS, last fiscal year", "source": "Nasdaq (forecast growth figures)", "critical": False,
+     "fields": "Last reported year's EPS on the analysts' basis, exchange-listed stocks only",
+     "fix": "Check api.nasdaq.com is up; see pipeline/sources/nasdaq.py (parse_growth)."},
     {"id": "n", "label": "Listing & country", "source": "Nasdaq (stock screener)", "critical": False,
      "fields": "Country where the workbook has none; which tickers are exchange-listed",
      "fix": "Check api.nasdaq.com is up; see pipeline/sources/nasdaq.py (parse_screener)."},
 )
 
-# Sources the workbook points at that an automated job cannot read. Shown so nobody wonders where they went.
+# The standing list of gaps: what the workbook asks for that an automated job cannot deliver, why,
+# what is shown instead, and the legitimate way to get the original figure. Shown on the Data health tab.
 UNAVAILABLE = (
-    {"name": "GuruFocus", "wanted": "EPS without NRI, 5-year EPS estimates, Altman Z-Score, Piotroski F-Score",
-     "reason": "Pages sit behind Cloudflare bot protection (HTTP 403 for any script). GuruFocus sells a data API for this.",
-     "instead": "EPS actuals from Yahoo statements (GAAP diluted); estimates from Nasdaq; Z and F scores calculated here "
-                "from the financial statements."},
-    {"name": "MarketWatch", "wanted": "Analyst EPS estimates",
-     "reason": "Pages sit behind DataDome bot protection (HTTP 401 for any script).",
-     "instead": "Nasdaq analyst forecasts (exchange-listed stocks)."},
-    {"name": "Yahoo Finance profile / key-statistics pages", "wanted": "Country, levered free cash flow, S&P-calculated EBITDA",
-     "reason": "Served only to signed-in browser sessions; Yahoo refuses the session token to scripts (HTTP 429).",
-     "instead": "Country from the workbook or Nasdaq; free cash flow and EBITDA from Yahoo's statement data "
-                "(same company filings, slightly different definitions)."},
+    {"name": "GuruFocus \u201cEPS without NRI\u201d for past years",
+     "wanted": "Each past year's EPS excluding one-off items, as GuruFocus calculates it",
+     "reason": "It is GuruFocus's own calculation and appears only on its pages, which sit behind Cloudflare bot "
+               "protection (HTTP 403 to any scheduled job).",
+     "instead": "Reported GAAP diluted EPS for each year (Yahoo), plus the latest fiscal year on the analysts' adjusted "
+                "basis for exchange-listed tickers (Nasdaq). GAAP figures include one-off items, so they can sit well "
+                "below the adjusted ones.",
+     "option": "GuruFocus's paid Data API returns EPS without NRI in one request per ticker; or type figures into overrides.csv."},
+    {"name": "EPS estimates for every ticker, five years out",
+     "wanted": "Consensus EPS for 2026-2030 from GuruFocus, MarketWatch or Yahoo",
+     "reason": "Those estimate pages refuse scheduled jobs (Cloudflare, DataDome, and a Yahoo login token that scripts are "
+               "not given), and no open feed carries estimates for OTC-traded ADRs.",
+     "instead": "Nasdaq's consensus for the next 3-4 fiscal years, exchange-listed tickers only. For OTC tickers: next "
+                "year's EPS implied by Yahoo's forward P/E, where Yahoo has one. The fifth year is usually blank.",
+     "option": "A licensed estimates feed (GuruFocus, FactSet, LSEG or a market-data API vendor), or hand entry."},
+    {"name": "GuruFocus Altman Z-Score and Piotroski F-Score",
+     "wanted": "The two scores exactly as GuruFocus publishes them",
+     "reason": "Same GuruFocus pages, same bot protection.",
+     "instead": "Both are calculated here from Yahoo's statements and usually land close to GuruFocus. Z is blank for "
+                "banks, insurers and similar companies (the score needs working capital and EBIT, which they do not "
+                "report); F is blank where any of its nine tests cannot be calculated.",
+     "option": "GuruFocus's paid Data API (same request as EPS without NRI)."},
+    {"name": "Yahoo \u201clevered free cash flow\u201d and Yahoo's own EBITDA",
+     "wanted": "The two key-statistics figures as Yahoo displays them",
+     "reason": "They are served only to signed-in browser sessions; Yahoo refuses the session token to scripts (HTTP 429). "
+               "Yahoo has no public data service.",
+     "instead": "Free cash flow (operating cash flow minus capital spending) and EBITDA excluding unusual items, from "
+                "Yahoo's statement feed. Same filings, slightly different definitions - expect differences of a few percent.",
+     "option": "None automated. Hand entry for the names that matter."},
+    {"name": "Country from Yahoo's company profile",
+     "wanted": "Head-office country for every ticker",
+     "reason": "Same signed-in-only Yahoo data.",
+     "instead": "The workbook's own Country label; Nasdaq's listing record where the workbook is blank.",
+     "option": "Fill in the workbook's Country column - it always wins."},
+    {"name": "Complete dividend history for some ADRs",
+     "wanted": "Dividend yield and 5-year dividend growth for every ticker",
+     "reason": "Yahoo's per-share dividend history stops in 2025 for many ADRs, mostly Japanese ones; the fuller figures "
+               "are on the signed-in pages above.",
+     "instead": "Yield from the cash-flow statement (dividends paid divided by market value). Growth is measured up to "
+                "the last dividend on record, or left blank where the history is too patchy.",
+     "option": "Hand entry, or a licensed dividend feed."},
 )
 
 

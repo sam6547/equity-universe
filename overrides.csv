@@ -1,5 +1,6 @@
 symbol,field,value,note
-# Optional: figures typed in by hand. They win over fetched values and show with a pencil mark.
+# Optional: single figures typed in by hand, one per line. They win over fetched values and show with a pencil mark.
+# For many figures at once, upload a spreadsheet-style CSV to the manual/ folder instead (see README).
 # Fields: name country sector industry exch price mcap ev ebitda fcf dy dg5 z f feps eps_YYYY
 # Examples (delete the leading # to use one):
 # A,eps_2026,6.20,GuruFocus EPS without NRI - read 2026-11-16

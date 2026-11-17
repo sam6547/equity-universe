@@ -48,12 +48,15 @@
         <select id="f-sector"></select>
         <label class="sr-only" for="f-exch">Exchange</label>
         <select id="f-exch"></select>
+        <label class="sr-only" for="f-missing">Show rows that lack a figure</label>
+        <select id="f-missing" title="Show only the rows that lack a figure - handy before downloading a sheet to fill in"></select>
         <label class="check"><input id="f-issues" type="checkbox"> Only rows with old or missing data</label>
       </div>
       <div class="actions">
         <span id="row-count" class="count"></span>
         <div id="group-toggles" class="chips" role="group" aria-label="Column groups"></div>
-        <button type="button" id="export" class="btn">Export CSV</button>
+        <button type="button" id="export" class="btn" title="Download the rows shown, in the workbook's column order">Export CSV</button>
+        <button type="button" id="template" class="btn" title="Download the tickers shown with empty columns. Fill in what you have and upload the file to the repository's manual/ folder: filled cells win, empty cells change nothing.">Blank sheet to fill in</button>
       </div>
     </div>
     <p class="key">
@@ -61,7 +64,7 @@
       <span><span class="mark stale-mark" aria-hidden="true">&#9719;</span> carried over from an earlier week</span>
       <span><span class="mark check-mark" aria-hidden="true">?</span> check against the source</span>
       <span><span class="alt-key">dotted underline</span> = worked out another way (hover to see how)</span>
-      <span><span class="mark" aria-hidden="true">&#9998;</span> typed in by hand</span>
+      <span><span class="mark" aria-hidden="true">&#9998;</span> entered by hand</span>
       <span>&mdash; not available</span>
       <span>Click a row for detail and sources</span>
     </p>

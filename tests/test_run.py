@@ -27,9 +27,11 @@ class PipelineCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="dash-test-")
         self.saved = {k: getattr(config, k) for k in
-                      ("UNIVERSE_CSV", "OVERRIDES_CSV", "DATA_DIR", "SNAPSHOT_DIR", "INDEX_JSON", "STATUS_JSON", "RUNS_JSON")}
+                      ("UNIVERSE_CSV", "OVERRIDES_CSV", "MANUAL_DIR", "DATA_DIR", "SNAPSHOT_DIR", "INDEX_JSON", "STATUS_JSON",
+                       "RUNS_JSON")}
         config.UNIVERSE_CSV = config.Path(self.tmp) / "universe.csv"
         config.OVERRIDES_CSV = config.Path(self.tmp) / "overrides.csv"
+        config.MANUAL_DIR = config.Path(self.tmp) / "manual"
         config.set_data_dir(os.path.join(self.tmp, "data"))
         with open(str(config.UNIVERSE_CSV), "w") as handle:
             handle.write(UNIVERSE)
@@ -391,6 +393,71 @@ class OverridesTest(PipelineCase):
         os.remove(str(config.OVERRIDES_CSV))
         self.go(WEEK1, "--force")
         self.assertNotIn("ovr", self.row(WEEK1, "AAA"))
+
+
+class ManualUploadTest(PipelineCase):
+    def upload(self, name, text):
+        os.makedirs(str(config.MANUAL_DIR), exist_ok=True)
+        with open(str(config.MANUAL_DIR / name), "w") as handle:
+            handle.write(text)
+
+    def test_an_uploaded_sheet_shows_up_without_waiting_for_the_weekly_refresh(self):
+        self.go(WEEK1)
+        calls = len(self.net.calls)
+        self.upload("gurufocus.csv", "Symbol,As of,Source,2025 EPS,Altman Z-Score,Piotroski F-Score,Dividend Yield\n"
+                                     "AAA,2026-11-16,GuruFocus,4.89,5.61,7,2.5%\n"
+                                     "BBB,2026-11-16,GuruFocus,,2.33,,\n")
+        self.assertEqual(self.go(WEEK1), 0)
+        self.assertEqual(len(self.net.calls), calls)                       # nothing was fetched
+        a = self.row(WEEK1, "AAA")
+        self.assertEqual(a["ovr"]["eps_2025"], [4.89, "GuruFocus \u00b7 as of 2026-11-16"])
+        self.assertEqual(a["ovr"]["z"][0], 5.61)
+        self.assertEqual(a["ovr"]["f"][0], 7)
+        self.assertAlmostEqual(a["ovr"]["dy"][0], 0.025)
+        self.assertEqual(a["eps_a"]["2025"], 5.2)                          # the fetched figure is still underneath
+        self.assertEqual(list(self.row(WEEK1, "BBB")["ovr"]), ["z"])       # empty cells change nothing
+        status = self.status()
+        self.assertEqual(status["mode"], "manual")
+        self.assertEqual(status["overall"], "ok")
+        self.assertEqual(status["manual"]["files"][0]["file"], "manual/gurufocus.csv")
+        self.assertEqual(status["manual"]["files"][0]["values"], 5)
+        self.assertEqual(status["manual"]["files"][0]["as_of"], "2026-11-16")
+        self.go(WEEK1)                                                     # and then it settles
+        self.assertEqual(snapshot.read_json(config.RUNS_JSON)[0]["mode"], "heartbeat")
+
+    def test_removing_the_sheet_brings_the_fetched_figures_back(self):
+        self.upload("mine.csv", "Symbol,Altman Z-Score\nAAA,5.61\n")
+        self.go(WEEK1)
+        self.assertIn("ovr", self.row(WEEK1, "AAA"))
+        os.remove(str(config.MANUAL_DIR / "mine.csv"))
+        self.go(WEEK1)
+        self.assertNotIn("ovr", self.row(WEEK1, "AAA"))
+        self.assertEqual(self.status()["mode"], "manual")
+
+    def test_the_one_line_file_has_the_last_word(self):
+        self.upload("mine.csv", "Symbol,Altman Z-Score,Piotroski F-Score\nAAA,5.61,7\n")
+        with open(str(config.OVERRIDES_CSV), "w") as handle:
+            handle.write("symbol,field,value,note\nAAA,z,9.99,checked by hand\n")
+        self.go(WEEK1)
+        a = self.row(WEEK1, "AAA")
+        self.assertEqual(a["ovr"]["z"], [9.99, "checked by hand"])
+        self.assertEqual(a["ovr"]["f"][0], 7)
+
+    def test_problems_in_a_sheet_are_reported_not_fatal(self):
+        self.upload("mine.csv", "Symbol,Altman Z-Score,Colour,Piotroski F-Score\nAAA,abc,blue,7\nZZZZ,1,red,3\nBBB,2.1,,12\n")
+        self.assertEqual(self.go(WEEK1), 0)
+        self.assertEqual(self.row(WEEK1, "AAA")["ovr"], {"f": [7, "manual/mine.csv"]})
+        self.assertEqual(self.row(WEEK1, "BBB")["ovr"], {"z": [2.1, "manual/mine.csv"]})
+        warnings = " | ".join(self.status()["warnings"])
+        self.assertIn("Colour", warnings)
+        self.assertIn("1 ticker not in universe.csv and skipped: ZZZZ", warnings)
+        self.assertIn("2 cells could not be read", warnings)
+
+    def test_later_weeks_keep_the_hand_entered_figures(self):
+        self.upload("mine.csv", "Symbol,Altman Z-Score\nAAA,5.61\n")
+        self.go(WEEK1)
+        self.go(WEEK2)
+        self.assertEqual(self.row(WEEK2, "AAA")["ovr"]["z"][0], 5.61)
 
 
 class HealthRulesTest(unittest.TestCase):

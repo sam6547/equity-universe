@@ -297,7 +297,7 @@ def apply_overrides(rows, overrides):
             continue
         if isinstance(value, float):
             value = int(value) if field == "f" else compute.round_sig(value, 7)
-        row.setdefault("ovr", {})[field] = [value, note]
+        row.setdefault("ovr", {})[field] = [value, note]   # later entries win
     return problems
 
 

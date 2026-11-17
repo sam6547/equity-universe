@@ -26,7 +26,7 @@ import sys
 import time
 import traceback
 
-from . import compute, config, dates, health, net, snapshot, universe
+from . import compute, config, dates, health, manual, net, snapshot, universe
 from .result import Result, FAILED
 from .sources import macro as macro_src
 from .sources import nasdaq, yahoo
@@ -113,11 +113,21 @@ def refresh(args, started):
     macro_todo = [k for k in MACRO_KEYS if k not in macro or macro_st.get(k)]
     pending = sum(1 for p in plan.values() if p.todo)
 
-    if existing is not None and not pending and not macro_todo:
+    # ---- figures entered by hand ---------------------------------------
+    overrides, warnings = snapshot.load_overrides()
+    manual_entries, manual_problems, manual_files = manual.load_folder(list(plan))
+    hand_entries = manual_entries + overrides          # overrides.csv is read last, so it has the last word
+    warnings += manual_problems
+    wanted = manual.desired_overrides(e for e in hand_entries if e[0] in plan)
+    hand_changed = existing is not None and any(
+        (wanted.get(s) or {}) != (cur_rows.get(s, {}).get("ovr") or {}) for s in plan)
+
+    if existing is not None and not pending and not macro_todo and not hand_changed:
         heartbeat(as_of_iso, trigger, started)
         return
 
-    mode = "full" if existing is None else "retry"
+    # "manual": nothing to fetch, but the hand-entered figures changed and the snapshot must show them
+    mode = "full" if existing is None else ("retry" if pending or macro_todo else "manual")
     log("%s refresh for week ending %s: %d of %d tickers to fetch%s" % (
         mode.capitalize(), as_of_iso, pending, len(plan), ", macro: " + ", ".join(macro_todo) if macro_todo else ""))
 
@@ -269,9 +279,11 @@ def refresh(args, started):
         snapshot.resolve_identity(row, u)
 
     rows_map = collections.OrderedDict((s, p.row) for s, p in plan.items())
-    overrides, warnings = snapshot.load_overrides()
-    warnings += snapshot.apply_overrides(rows_map, overrides)
+    warnings += snapshot.apply_overrides(rows_map, hand_entries)
     rows = list(rows_map.values())
+    if hand_entries:
+        log("Hand-entered figures: %d from %d file(s) in manual/, %d from overrides.csv" % (
+            len(manual_entries), len(manual_files), len(overrides)))
 
     # ---- health ---------------------------------------------------------
     cov = snapshot.coverage(rows)
@@ -304,6 +316,7 @@ def refresh(args, started):
         "fx": {"currencies": sorted(r for r, _ in needed), "failed": sorted(fx_failed)},
         "http": client.stats(), "coverage": cov, "coverage_alerts": alerts,
         "attention": health.attention_list(rows), "warnings": warnings,
+        "manual": {"files": manual_files, "overrides_csv": len(overrides), "stale_after_days": config.MANUAL_STALE_DAYS},
         "unavailable": list(health.UNAVAILABLE), "links": health.repo_links(),
     }
     snapshot.write_json(config.STATUS_JSON, status)

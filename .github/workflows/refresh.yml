@@ -21,6 +21,7 @@ on:
       - "tests/**"
       - "universe.csv"
       - "overrides.csv"
+      - "manual/**"
       - ".github/workflows/refresh.yml"
 
 permissions:

@@ -67,8 +67,8 @@ What that costs, column by column (the dashboard's *Data health* tab carries the
   `pipeline/sources/` next to the others.
 * **GuruFocus Excel add-in** (Premium members): pulls the same figures straight into the workbook.
 * **A licensed market-data API** for analyst estimates on OTC ADRs.
-* **Hand entry**: any figure typed into `overrides.csv` (see below) wins over the fetched
-  one and is marked ✎.
+* **Hand entry**: upload a filled-in sheet to the `manual/` folder (see *Add figures of your
+  own* below); those figures win over the fetched ones and are marked ✎.
 
 ## How the weekly refresh works
 
@@ -106,15 +106,41 @@ python3 -m pipeline.import_universe "Equity Universe Version 2.xlsx"
 Commit the updated `universe.csv`. New tickers are fetched on the next run. (This one step
 needs `pip install openpyxl`; nothing else does.) You can also edit `universe.csv` directly.
 
-**Type in a figure by hand** - add a line to `overrides.csv`:
+**Add figures of your own (upload a sheet)**
+
+Anything the job cannot fetch - GuruFocus's EPS without NRI, its Z and F scores, estimates for
+OTC tickers - can be supplied by hand:
+
+1. On the dashboard, narrow the table to the rows you want (the *Any row* menu has
+   "No EPS estimates", "No Altman Z" and so on) and press **Blank sheet to fill in**.
+   You get a CSV with those tickers and empty columns.
+2. Fill in what you have - from a GuruFocus or Schwab export, or by reading the pages.
+   Leave everything else empty. Set the *As of* date to when the figures were taken and,
+   if you like, *Source* (for example `GuruFocus`).
+3. In the repository on GitHub, open the `manual` folder → *Add file* → *Upload files* →
+   drop the CSV in → *Commit changes*.
+
+The dashboard updates a few minutes later. Rules:
+
+* A filled cell wins over the fetched value and is marked ✎; an empty cell changes nothing.
+* Column names are matched loosely, so a vendor's export usually works as it is, provided
+  it has a `Symbol` (or `Ticker`) column. Headings that are not recognised are listed on
+  the *Data health* tab rather than silently dropped.
+* Numbers can be written as `1,234.5`, `$521.41B`, `(3.2)`, `2.5%` or `0.025`.
+* Hand-entered figures do not refresh themselves. The *Data health* tab shows each file's
+  date and flags it after 35 days; upload a newer file (same name) to replace it, or delete
+  the file to go back to the fetched figures.
+* Several files can sit side by side (`gurufocus.csv`, `schwab.csv`); if two give the same
+  figure, the file later in alphabetical order wins. Files starting with `_` are ignored.
+* The repository is public, so whatever you upload is public too. Data vendors' terms
+  generally do not allow republishing their figures in bulk.
+
+For a single figure it can be quicker to add one line to `overrides.csv`, which is read last:
 
 ```csv
 symbol,field,value,note
-A,eps_2026,6.20,GuruFocus EPS without NRI - read 2026-11-16
-SNY,z,2.33,GuruFocus Altman Z
+SNY,z,2.33,GuruFocus Altman Z - read 2026-11-16
 ```
-
-Hand-typed values show with a ✎ mark. Delete the line and the fetched value comes back.
 
 **Refresh right now** - GitHub → Actions → *Refresh data* → *Run workflow* (tick "force" to
 re-fetch the whole week).
@@ -150,10 +176,11 @@ pipeline/sources/          one module per source: yahoo.py, nasdaq.py, macro.py
 pipeline/compute.py        dividend maths, Altman Z, Piotroski F, currency conversion
 pipeline/net.py            polite HTTP client: pacing, retries, back-off, circuit breaker
 pipeline/snapshot.py       weekly files, carry-forward of last good values, overrides
+pipeline/manual.py         reads the sheets of hand-entered figures in manual/
 pipeline/health.py         what the Data health tab shows
 pipeline/report.py         GitHub issue + pass/fail for the workflow
 site/                      the dashboard (plain HTML/CSS/JS) and its data
-tests/                     132 tests, including simulated outages
+tests/                     154 tests, including simulated outages
 .github/workflows/         the schedule
 ```
 

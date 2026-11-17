@@ -11,7 +11,7 @@
     snap: null, week: null, cache: {},
     view: 'universe',
     sort: { key: null, dir: 1 },
-    filters: { q: '', country: '', sector: '', exch: '', issues: false },
+    filters: { q: '', country: '', sector: '', exch: '', missing: '', issues: false },
     groups: loadGroups(),
     selected: null,
     cols: [],
@@ -337,6 +337,15 @@
     }
     return out;
   }
+  function handFiles() {
+    var m = (state.status || {}).manual || {}, limit = m.stale_after_days || 35;
+    return (m.files || []).map(function (f) {
+      var from = f.oldest || f.as_of;        // judge a file by its oldest figure
+      var days = from ? Math.floor((Date.now() - parseDay(from).getTime()) / DAY) : null;
+      return { file: f.file, values: f.values, tickers: f.tickers, fields: f.fields || [], as_of: f.as_of, oldest: from, undated: f.undated,
+        days: days, old: days != null && days > limit, limit: limit };
+    });
+  }
   function overallLevel() {
     var st = state.status || {};
     var checks = clientChecks();
@@ -410,6 +419,10 @@
       h('div', { class: 'note', text: s.last_check ? 'Job last ran ' + fmtStamp(s.last_check) + ' (' + ago(s.last_check) + ')' : 'No run recorded yet' }),
       (s.attention || []).length ? h('div', { class: 'note', text: s.attention.length + ' ticker' + (s.attention.length === 1 ? ' needs' : 's need') + ' a look (renamed or no longer trading?): ' +
         s.attention.slice(0, 4).map(function (a) { return a.symbol; }).join(', ') + (s.attention.length > 4 ? '\u2026' : '') }) : null,
+      (function () {
+        var old = handFiles().filter(function (f) { return f.old; });
+        return old.length ? h('div', { class: 'note', text: 'Hand-entered figures are getting old: ' + old.map(function (f) { return f.file.replace('manual/', '') + ' (' + f.days + ' days)'; }).join(', ') }) : null;
+      })(),
       h('div', { class: 'note' }, healthLink('Open data health')));
     box.appendChild(health);
   }
@@ -427,9 +440,28 @@
       sel.value = keep;
       if (sel.value !== keep) state.filters[key] = '';
     }
+    var miss = clear($('f-missing'));
+    MISSING.forEach(function (m) { miss.appendChild(h('option', { value: m[0], text: m[1] })); });
+    miss.value = state.filters.missing;
     fill('f-country', 'country', 'All countries');
     fill('f-sector', 'sector', 'All sectors');
     fill('f-exch', 'exch', 'All exchanges');
+  }
+  var MISSING = [
+    ['', 'Any row'], ['eps_e', 'No EPS estimates'], ['eps_adj', 'No adjusted EPS'], ['z', 'No Altman Z'], ['f', 'No Piotroski F'],
+    ['dy', 'No dividend yield'], ['dg5', 'No dividend growth'], ['ev', 'No enterprise value'], ['ebitda', 'No EBITDA'],
+    ['country', 'No country'], ['check', 'Marked ? to check'], ['hand', 'Has hand-entered figures']
+  ];
+  function isMissing(row, what) {
+    if (what === 'check') return !!(row.unit_flag || row.div_odd);
+    if (what === 'hand') return !!row.ovr;
+    if (what === 'eps_e') {
+      var y0 = +state.snap.as_of.slice(0, 4);
+      return !(state.snap.eps_years || []).some(function (y) { var e = epsAt(row, y); return y >= y0 && e && e.kind !== 'a'; });
+    }
+    if (what === 'eps_adj') return !adjEps(row);
+    var v = get(row, what);
+    return v == null || v === '';
   }
   function filteredRows() {
     var f = state.filters, q = f.q.trim().toLowerCase();
@@ -441,6 +473,7 @@
         return f[k] === '__none' ? !v : v === f[k];
       });
       if (!ok) return false;
+      if (f.missing && !isMissing(r, f.missing)) return false;
       return !f.issues || hasIssue(r);
     });
     var col = state.cols.filter(function (c) { return c.key === state.sort.key; })[0];
@@ -571,7 +604,7 @@
     if (stale) { cls.push('stale'); kids.push(h('span', { class: 'mark stale-mark', 'aria-label': 'carried over from an earlier week', text: '◷' })); }
     if (manual !== null) {
       kids.push(h('span', { class: 'mark', 'aria-label': 'typed in by hand', text: '✎' }));
-      title = 'Typed in by hand (overrides.csv)' + (manual ? ': ' + manual : '');
+      title = 'Entered by hand' + (manual ? ' \u00b7 ' + manual : '') + '\nThis figure is not refreshed automatically.';
     }
     return h('td', { class: cls.join(' '), title: title }, kids);
   }
@@ -620,7 +653,7 @@
         if (c.indexOf('s:') === 0) notes.push(DATASETS[ds].label + ' carried over from ' + c.slice(2));
         else if (c === 'm') notes.push(DATASETS[ds].label + ' unavailable');
       });
-      if (r.ovr) notes.push('Typed in by hand: ' + Object.keys(r.ovr).join(' '));
+      if (r.ovr) notes.push('Entered by hand: ' + Object.keys(r.ovr).join(' '));
       if (r.unit_flag) notes.push('Check per-share figures against the source');
       if (r.div_odd) notes.push('Check dividend figures against the source');
       if (r.dy_src === 'cf') notes.push('Dividend yield from the cash-flow statement');
@@ -637,6 +670,9 @@
         .concat([adjEps(r) ? adjEps(r).v : '', get(r, 'feps'), get(r, 'mcap'), get(r, 'ev'), get(r, 'ebitda'), get(r, 'fcf'), get(r, 'exch'), get(r, 'dy'), get(r, 'dg5'),
           get(r, 'z'), get(r, 'f'), snap.as_of, notes.join('; ')]));
     });
+    saveCsv(lines, 'equity-universe-' + snap.as_of + '.csv');
+  }
+  function saveCsv(lines, filename) {
     var csv = lines.map(function (line) {
       return line.map(function (v) {
         if (v == null) return '';
@@ -645,12 +681,28 @@
         return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
       }).join(',');
     }).join('\r\n');
-    var url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
-    var a = h('a', { href: url, download: 'equity-universe-' + snap.as_of + '.csv' });
+    var url = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' }));
+    var a = h('a', { href: url, download: filename });
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+  }
+  /* A sheet to fill in by hand: the tickers currently shown, with empty columns. Filled cells win once the
+     file is uploaded to the repository's manual/ folder; empty cells change nothing. */
+  function blankSheet() {
+    var snap = state.snap, years = snap.eps_years || [];
+    var head = ['Symbol', 'Company Name', 'As of', 'Source'].concat(years.map(function (y) { return y + ' EPS'; }))
+      .concat(['Market Capitalization', 'Enterprise Value', 'EBITDA', 'Free Cash Flow', 'Dividend Yield', '5 Year Dividend Growth Rate',
+        'Altman Z-Score', 'Piotroski F-Score', 'Country', 'Sector', 'Industry']);
+    var today = new Date(), stamp = today.getFullYear() + '-' + ('0' + (today.getMonth() + 1)).slice(-2) + '-' + ('0' + today.getDate()).slice(-2);
+    var lines = [head];
+    filteredRows().forEach(function (r) {
+      var line = [r.s, get(r, 'name') || '', stamp, ''];
+      while (line.length < head.length) line.push('');
+      lines.push(line);
+    });
+    saveCsv(lines, 'figures-' + stamp + '.csv');
   }
 
   // ------------------------------------------------------------------ tooltip (charts)
@@ -778,7 +830,7 @@
         ? 'No analyst forecast (' + (get(row, 'exch') === 'OTC' ? 'OTC tickers are not covered by Nasdaq' : 'none published by Nasdaq') + ')' : 'Not available';
       var basis = !p.e ? none : p.e.kind === 'a' ? 'Reported, GAAP diluted (Yahoo Finance)'
         : p.e.kind === 'e' ? 'Analyst consensus' + (p.e.n ? ', ' + p.e.n + ' analyst' + (p.e.n === 1 ? '' : 's') : '') + ' (Nasdaq)'
-          : 'Typed in by hand' + (p.e.note ? ': ' + p.e.note : '');
+          : 'Entered by hand' + (p.e.note ? ': ' + p.e.note : '');
       if (p.e && p.e.kind === 'a' && row.eps_ar && isNum(row.eps_ar[p.year])) basis += ' · ' + fmtNum(row.eps_ar[p.year], 2) + ' ' + row.fcur + ' as reported';
       tb.appendChild(h('tr', null, h('td', { text: String(p.year) }), h('td', { class: 'num' + (p.e && p.e.kind === 'e' ? ' est' : ''), text: p.e ? fmtNum(p.e.v, 2) : '—' }),
         h('td', { class: 'fine', text: basis })));
@@ -853,7 +905,8 @@
     var src = row.src || {}, names = { wb: 'the workbook', y: 'Yahoo Finance', nq: 'Nasdaq' };
     var srcLine = ['country', 'sector', 'industry'].filter(function (k) { return src[k]; }).map(function (k) { return k + ' from ' + names[src[k]]; }).join('; ');
     if (srcLine) d.appendChild(h('p', { class: 'fine', text: srcLine.charAt(0).toUpperCase() + srcLine.slice(1) + '.' + (row.country_alt ? ' Nasdaq lists the country as ' + row.country_alt + '.' : '') }));
-    if (row.ovr) d.appendChild(h('p', { class: 'fine', text: 'Typed in by hand (overrides.csv): ' + Object.keys(row.ovr).join(', ') + '.' }));
+    if (row.ovr) d.appendChild(h('p', { class: 'fine', text: 'Entered by hand, not refreshed automatically: ' +
+      Object.keys(row.ovr).map(function (k) { return k.replace(/^eps_/, 'EPS ') + (row.ovr[k][1] ? ' (' + row.ovr[k][1] + ')' : ''); }).join('; ') + '.' }));
 
     // history across weeks
     d.appendChild(h('h3', { text: 'Earlier weeks' }));
@@ -1018,6 +1071,29 @@
       wrap.appendChild(card);
     }
 
+    // figures entered by hand
+    var hand = handFiles(), typed = ((st.manual || {}).overrides_csv) || 0;
+    if (hand.length || typed) {
+      var hc = h('div', { class: 'card' }, h('h2', { text: 'Figures entered by hand' }),
+        h('p', { class: 'lead', text: 'These came from files uploaded to the repository\u2019s manual/ folder. They win over fetched figures, show with a \u270e mark, and do not refresh by themselves: export and upload again when they get old.' }));
+      if (hand.length) {
+        var ht = h('table', { class: 'htable' }, h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'File' }), h('th', { scope: 'col', class: 'n', text: 'Figures' }),
+          h('th', { scope: 'col', class: 'n', text: 'Tickers' }), h('th', { scope: 'col', text: 'As of' }), h('th', { scope: 'col', text: 'State' }))));
+        var hb = h('tbody');
+        hand.forEach(function (f) {
+          hb.appendChild(h('tr', null, h('td', null, h('b', { text: f.file }), h('div', { class: 'what', text: f.fields.map(function (k) { return k.replace(/^eps_/, 'EPS '); }).join(', ') })),
+            h('td', { class: 'n', text: String(f.values) }), h('td', { class: 'n', text: String(f.tickers) }),
+            h('td', { text: f.as_of ? (f.oldest && f.oldest !== f.as_of ? fmtDay(f.oldest) + ' to ' + fmtDay(f.as_of) : fmtDay(f.as_of)) +
+              ' (' + (f.days === 0 ? 'today' : f.days + ' day' + (f.days === 1 ? '' : 's') + ' ago') + ')' : 'no date given' }),
+            h('td', null, !f.as_of ? badge('blocked', 'Add an \u201cAs of\u201d column') : f.old ? badge('degraded', 'Older than ' + f.limit + ' days') : badge('ok', 'Current'))));
+        });
+        ht.appendChild(hb);
+        hc.appendChild(h('div', { class: 'scroll-x' }, ht));
+      }
+      if (typed) hc.appendChild(h('p', { class: 'fine', text: 'Plus ' + typed + ' single figure' + (typed === 1 ? '' : 's') + ' in overrides.csv.' }));
+      wrap.appendChild(hc);
+    }
+
     // coverage meters
     var cov = st.coverage || {};
     var labels = { price: 'Price', country: 'Country', sector: 'Sector', industry: 'Industry', exch: 'Exchange', eps_a: 'EPS (reported)', eps_adj: 'EPS, adjusted (last year)', eps_e: 'EPS estimates',
@@ -1048,7 +1124,7 @@
           h('div', { class: 'what', text: 'Shown instead: ' + u.instead }),
           u.option ? h('div', { class: 'what', text: 'To get the original: ' + u.option }) : null));
       });
-      un.appendChild(h('p', { class: 'fine', text: 'A figure you would rather take from one of these pages can be typed into overrides.csv; it then shows with a ✎ mark.' }));
+      un.appendChild(h('p', { class: 'fine', text: 'Any of these can be filled in by hand: download a blank sheet from the Universe tab, fill in what you have, and upload it to the repository\u2019s manual/ folder. Those figures then show with a \u270e mark.' }));
       two.appendChild(un);
     }
     var runs = h('div', { class: 'card' }, h('h2', { text: 'Recent runs' }));
@@ -1056,7 +1132,7 @@
     else {
       var rt = h('table', { class: 'htable' }, h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'When' }), h('th', { scope: 'col', text: 'Kind' }), h('th', { scope: 'col', text: 'Result' }), h('th', { scope: 'col', text: 'Summary' }))));
       var rb = h('tbody');
-      var kinds = { full: 'Full refresh', retry: 'Retry', heartbeat: 'Check-in', crash: 'Crashed' };
+      var kinds = { full: 'Full refresh', retry: 'Retry', heartbeat: 'Check-in', crash: 'Crashed', manual: 'Hand-entered figures' };
       state.runs.slice(0, 25).forEach(function (r) {
         rb.appendChild(h('tr', null, h('td', { style: 'white-space:nowrap' }, r.run ? extLink(fmtStamp(r.ts), r.run) : fmtStamp(r.ts)),
           h('td', { style: 'white-space:nowrap', text: kinds[r.mode] || r.mode || '' }), h('td', null, badge(r.overall || 'ok')),
@@ -1092,7 +1168,9 @@
       $(p[0]).addEventListener('change', function (e) { state.filters[p[1]] = e.target.value; renderTable(); });
     });
     $('f-issues').addEventListener('change', function (e) { state.filters.issues = e.target.checked; renderTable(); });
+    $('f-missing').addEventListener('change', function (e) { state.filters.missing = e.target.value; renderTable(); });
     $('export').addEventListener('click', exportCsv);
+    $('template').addEventListener('click', blankSheet);
     $('grid-body').addEventListener('click', function (e) { rowFromEvent(e, true); });
     $('grid-body').addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rowFromEvent(e, false); } });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('drawer').hidden) closeDrawer(); });

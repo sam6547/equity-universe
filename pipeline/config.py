@@ -8,7 +8,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 # Inputs
 UNIVERSE_CSV = ROOT / "universe.csv"      # the ticker list (generated from the workbook)
-OVERRIDES_CSV = ROOT / "overrides.csv"    # optional manual values that win over fetched ones
+OVERRIDES_CSV = ROOT / "overrides.csv"    # optional manual values that win over fetched ones (one per line)
+MANUAL_DIR = ROOT / "manual"              # optional spreadsheet-style CSVs of figures entered by hand
+MANUAL_STALE_DAYS = 35                    # the dashboard flags hand-entered figures older than this
 
 # Outputs (everything the dashboard reads is a static file under site/data)
 SITE_DIR = ROOT / "site"

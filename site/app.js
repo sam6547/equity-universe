@@ -1,5 +1,5 @@
 /* Equity Universe dashboard - plain JavaScript, no build step, no external libraries.
-   Reads the static JSON files the weekly job writes under ./data/. */
+   Reads the static JSON files the daily job writes under ./data/. */
 (function () {
   'use strict';
 
@@ -118,11 +118,6 @@
     return Math.round(hrs / 24) + ' days ago';
   }
   function isoDay(d) { return d.toISOString().slice(0, 10); }
-  function lastCompletedFriday(now) {
-    var d = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    var back = (new Date(d).getUTCDay() - 5 + 7) % 7;
-    return new Date(d - (back === 0 ? 7 : back) * DAY);
-  }
 
   // ------------------------------------------------------------------ row accessors
   function override(row, key) { return row.ovr && row.ovr[key] ? row.ovr[key] : null; }
@@ -145,7 +140,7 @@
     return Object.keys(row.st).some(function (k) { var c = row.st[k]; return c === 'm' || c.indexOf('s:') === 0; });
   }
   function staleTitle(row, ds) {
-    return 'Carried over from the week ending ' + fmtDay(stCode(row, ds).slice(2)) + ' - this week’s fetch from ' + DATASETS[ds].source + ' failed.';
+    return 'Carried over from ' + fmtDay(stCode(row, ds).slice(2), true) + ' - the latest fetch from ' + DATASETS[ds].source + ' failed.';
   }
 
   // ------------------------------------------------------------------ columns
@@ -159,9 +154,11 @@
       { key: 'industry', label: 'Industry', group: 'class', text: true, cls: 'clip', ds: 'p' },
       { key: 'exch', label: 'Exchange', group: 'class', text: true, ds: 'q' },
       { key: 'price', label: 'Price', group: 'price', ds: 'q', fmt: function (v) { return fmtNum(v, 2); },
-        title: 'Closing price for the week (in the currency the stock trades in)' },
+        title: 'Closing price for the day (in the currency the stock trades in)' },
+      { key: 'chg1d', label: '1 day', group: 'price', ds: 'q', delta: true, fmt: function (v) { return fmtSigned(v, 1); },
+        title: 'Price change since the previous trading day\u2019s close' },
       { key: 'chg1w', label: '1 wk', group: 'price', ds: 'q', delta: true, fmt: function (v) { return fmtSigned(v, 1); },
-        title: 'Price change over the week' }
+        title: 'Price change over the last week (since the close a week earlier)' }
     ];
     (snap.eps_years || []).forEach(function (y) {
       cols.push({ key: 'eps_' + y, label: String(y), group: 'eps', eps: y,
@@ -244,7 +241,7 @@
         $('empty').textContent = 'No snapshot has been published yet. The first scheduled refresh will create one.';
         return;
       }
-      var wanted = (location.hash.match(/week=(\d{4}-\d{2}-\d{2})/) || [])[1];
+      var wanted = (location.hash.match(/(?:day|week)=(\d{4}-\d{2}-\d{2})/) || [])[1];
       fillWeekSelect(weeks);
       showWeek(weeks.indexOf(wanted) >= 0 ? wanted : weeks[0]);
       if (/view=health/.test(location.hash)) setView('health');
@@ -284,7 +281,7 @@
   }
   function setHash() {
     var parts = [];
-    if (state.index && state.week && state.week !== state.index.latest) parts.push('week=' + state.week);
+    if (state.index && state.week && state.week !== state.index.latest) parts.push('day=' + state.week);
     if (state.view === 'health') parts.push('view=health');
     history.replaceState(null, '', parts.length ? '#' + parts.join('&') : location.pathname + location.search);
   }
@@ -293,12 +290,12 @@
   function fillWeekSelect(weeks) {
     var sel = clear($('week-select'));
     weeks.forEach(function (w, i) {
-      sel.appendChild(h('option', { value: w, text: 'Week ending ' + fmtDay(w, true) + (i === 0 ? '  (latest)' : '') }));
+      sel.appendChild(h('option', { value: w, text: 'Close of ' + fmtDay(w, true) + (i === 0 ? '  (latest)' : '') }));
     });
   }
   function renderSubtitle() {
     var snap = state.snap;
-    var text = snap.rows.length.toLocaleString('en-US') + ' tickers · week ending ' + fmtDay(snap.as_of, true);
+    var text = snap.rows.length.toLocaleString('en-US') + ' tickers \u00b7 close of ' + fmtDay(snap.as_of, true);
     if (snap.updated_at) text += ' · data fetched ' + fmtStamp(snap.updated_at);
     $('subtitle').textContent = text;
   }
@@ -319,20 +316,22 @@
     var out = [], st = state.status, now = new Date();
     if (st && st.last_check) {
       var hours = (now - new Date(st.last_check)) / 3600000;
-      if (hours > 50) {
-        out.push({ level: hours > 120 ? 'critical' : 'warning',
-          title: 'The scheduled job has not checked in for ' + Math.round(hours / 24) + ' days.',
-          detail: 'It should run every day (last seen ' + fmtStamp(st.last_check) + '). The schedule may be paused or the job may be failing to start.' });
+      if (hours > 26) {
+        out.push({ level: hours > 50 ? 'critical' : 'warning',
+          title: 'The scheduled job has not checked in for ' + (hours < 48 ? Math.round(hours) + ' hours.' : Math.round(hours / 24) + ' days.'),
+          detail: 'It should run three times every morning (last seen ' + fmtStamp(st.last_check) + '). The schedule may be paused or the job may be failing to start.' });
       }
     }
     var latest = state.index && state.index.latest;
-    if (latest) {
-      var expected = lastCompletedFriday(now);
-      var overdue = (now - expected) / 3600000 - 44;   // Friday 00:00 UTC + 44h = Saturday 20:00 UTC
-      if (latest < isoDay(expected) && overdue > 0) {
-        out.push({ level: overdue > 48 ? 'critical' : 'warning',
-          title: 'No data yet for the week ending ' + fmtDay(isoDay(expected), true) + '.',
-          detail: 'The newest snapshot is for the week ending ' + fmtDay(latest, true) + '. This week’s refresh has not completed.' });
+    var next = st && st.next_session;
+    if (latest && next && latest < next) {
+      // the close of `next` should be on the page by 10:00 New York (14:00/15:00 UTC) the following morning
+      var due = parseDay(next).getTime() + DAY + 15 * 3600000;
+      var overdue = (now.getTime() - due) / 3600000;
+      if (overdue > 0) {
+        out.push({ level: overdue > 24 ? 'critical' : 'warning',
+          title: 'No data yet for the close of ' + fmtDay(next, true) + '.',
+          detail: 'The newest snapshot is for ' + fmtDay(latest, true) + '. The morning refresh has not completed.' });
       }
     }
     return out;
@@ -357,15 +356,15 @@
     var box = clear($('banners')), st = state.status;
     clientChecks().forEach(function (c) { box.appendChild(banner(c.level, c.title, c.detail, healthLink('Open data health'))); });
     var viewingLatest = !state.index || !state.week || state.week === state.index.latest;
-    var tail = viewingLatest ? ' - some figures below are from an earlier week.' : ' (this affects the latest week, not the one shown).';
+    var tail = viewingLatest ? ' - some figures below are from an earlier day.' : ' (this affects the latest day, not the one shown).';
     if (st && st.overall === 'failed') {
       box.appendChild(banner('critical', 'The last refresh failed' + tail, st.headline, healthLink()));
     } else if (st && st.overall === 'degraded') {
       box.appendChild(banner('warning', 'The last refresh was incomplete' + tail, st.headline, healthLink()));
     }
     if (state.index && state.week && state.week !== state.index.latest) {
-      box.appendChild(banner('info', 'You are looking at an earlier week: ' + fmtDay(state.week, true) + '.', null,
-        h('button', { type: 'button', class: 'link-btn', text: 'Back to the latest week', on: { click: function () { showWeek(state.index.latest); } } })));
+      box.appendChild(banner('info', 'You are looking at an earlier day: the close of ' + fmtDay(state.week, true) + '.', null,
+        h('button', { type: 'button', class: 'link-btn', text: 'Back to the latest day', on: { click: function () { showWeek(state.index.latest); } } })));
     }
   }
   function renderHealthPill() {
@@ -385,7 +384,7 @@
     (notes || []).forEach(function (n) { if (n) el.appendChild(h('div', { class: 'note' }, n)); });
     if (staleSince) {
       el.appendChild(h('div', { class: 'note' }, h('span', { class: 'mark stale-mark', 'aria-hidden': 'true', text: '◷ ' }),
-        'Not refreshed this week - value from the week ending ' + fmtDay(staleSince)));
+        'Not refreshed today - value from ' + fmtDay(staleSince, true)));
     }
     return el;
   }
@@ -474,6 +473,7 @@
       });
       if (!ok) return false;
       if (f.missing && !isMissing(r, f.missing)) return false;
+      if (manage.hiddenNow[symbolKey(r.s)]) return false;      // just removed; the data catches up in a few minutes
       return !f.issues || hasIssue(r);
     });
     var col = state.cols.filter(function (c) { return c.key === state.sort.key; })[0];
@@ -587,7 +587,7 @@
         if (c.est) cls.push('est');
         kids.push(text);
         if (c.text) title = text;
-        if (c.key === 'price' && row.plag) title = 'No trade in the reported week: this is the close from ' + row.plag + ' week' + (row.plag > 1 ? 's' : '') + ' earlier.';
+        if (c.key === 'price' && row.plag) title = 'No trade on this day: this is the close from ' + (row.pdate ? fmtDay(row.pdate, true) : row.plag + ' trading days earlier') + '.';
         if (c.key === 'dy' && row.div_lapsed) title = 'Payments have slowed or stopped: this counts only what was paid in the last 12 months.';
         if ((c.key === 'dy' || c.key === 'dg5') && row.div_odd && !o) { check = true; title = DIV_NOTE; }
         if (!o && c.key === 'dy' && row.dy_src === 'cf') { cls.push('alt'); title = cfYieldNote(row); }
@@ -601,7 +601,7 @@
       }
     }
     if (check) kids.push(h('span', { class: 'mark check-mark', 'aria-label': 'check against the source', text: '?' }));
-    if (stale) { cls.push('stale'); kids.push(h('span', { class: 'mark stale-mark', 'aria-label': 'carried over from an earlier week', text: '◷' })); }
+    if (stale) { cls.push('stale'); kids.push(h('span', { class: 'mark stale-mark', 'aria-label': 'carried over from an earlier day', text: '◷' })); }
     if (manual !== null) {
       kids.push(h('span', { class: 'mark', 'aria-label': 'typed in by hand', text: '✎' }));
       title = 'Entered by hand' + (manual ? ' \u00b7 ' + manual : '') + '\nThis figure is not refreshed automatically.';
@@ -643,7 +643,7 @@
     var head = ['Country', 'Sector', 'Industry', 'Symbol', 'Company Name', 'Price', 'CAGR of S&P 500', '10 Yr Treasury Yield', 'Inflation (CPI)']
       .concat(years.map(function (y) { return y + ' EPS' + (y >= asOfYear ? ' (estimate)' : ''); }))
       .concat(['Last FY EPS (adjusted)', 'Next FY EPS (implied)', 'Market Capitalization', 'Enterprise Value', 'EBITDA', 'Free Cash Flow', 'Exchange', 'Dividend Yield',
-        '5 Year Dividend Growth Rate', 'Altman Z-Score', 'Piotroski F-Score', 'Week Ending', 'Notes']);
+        '5 Year Dividend Growth Rate', 'Altman Z-Score', 'Piotroski F-Score', 'As of', 'Notes']);
     var sp = m.sp500 && m.sp500.headline ? m.sp500.headline.value : '';
     var lines = [head];
     filteredRows().forEach(function (r) {
@@ -661,7 +661,7 @@
       if (r.dg5_old) notes.push('Dividend growth measured to ' + r.div_last);
       if (r.z_est) notes.push('Z-score uses total reserves for retained earnings');
       if (adjEps(r)) notes.push('Adjusted EPS is for fiscal ' + adjEps(r).year);
-      if (r.plag) notes.push('Price is ' + r.plag + ' week(s) old');
+      if (r.plag) notes.push('Last traded ' + (r.pdate || (r.plag + ' trading days earlier')));
       var kinds = years.map(function (y) { var e = epsAt(r, y); return e ? e.kind : ''; });
       if (kinds.some(function (k, i) { return k === 'a' && years[i] >= asOfYear; })) notes.push('Reported EPS through ' + years[kinds.lastIndexOf('a')]);
       lines.push([get(r, 'country'), get(r, 'sector'), get(r, 'industry'), r.s, get(r, 'name'), get(r, 'price'), sp,
@@ -792,11 +792,11 @@
   }
   function freshness(row, ds) {
     var c = stCode(row, ds);
-    if (!c) return 'Fresh this week';
+    if (!c) return 'Fresh';
     if (c === 'n') return DATASETS[ds].none;
-    if (c === 'm') return 'Unavailable - this week’s fetch failed and there is no earlier value';
-    if (c.indexOf('c:') === 0) return 'Checked in the week ending ' + fmtDay(c.slice(2)) + ' (re-checked every few weeks)';
-    return 'Carried over from the week ending ' + fmtDay(c.slice(2)) + ' - this week’s fetch failed';
+    if (c === 'm') return 'Unavailable - the latest fetch failed and there is no earlier value';
+    if (c.indexOf('c:') === 0) return 'Checked on ' + fmtDay(c.slice(2)) + ' (re-checked every few weeks)';
+    return 'Carried over from ' + fmtDay(c.slice(2), true) + ' - the latest fetch failed';
   }
   function openDrawer(row) {
     state.selected = row.s;
@@ -811,8 +811,9 @@
     // price
     d.appendChild(h('h3', { text: 'Price' }));
     d.appendChild(kv([
-      ['Week’s close', fmtNum(get(row, 'price'), 2), row.price != null ? cur + (row.plag ? ' · last traded ' + row.plag + ' wk earlier' : '') : null],
-      ['Change over the week', fmtSigned(row.chg1w, 1)],
+      ['Close', fmtNum(get(row, 'price'), 2), row.price != null ? cur + (row.plag && row.pdate ? ' \u00b7 last traded ' + fmtDay(row.pdate, true) : '') : null],
+      ['Change on the day', fmtSigned(row.chg1d, 1)],
+      ['Change over a week', fmtSigned(row.chg1w, 1)],
       ['One-year change', fmtSigned(row.ret1y, 1)],
       ['52-week range', isNum(row.lo52) && isNum(row.hi52) ? fmtNum(row.lo52, 2) + ' – ' + fmtNum(row.hi52, 2) : null]
     ]));
@@ -908,8 +909,8 @@
     if (row.ovr) d.appendChild(h('p', { class: 'fine', text: 'Entered by hand, not refreshed automatically: ' +
       Object.keys(row.ovr).map(function (k) { return k.replace(/^eps_/, 'EPS ') + (row.ovr[k][1] ? ' (' + row.ovr[k][1] + ')' : ''); }).join('; ') + '.' }));
 
-    // history across weeks
-    d.appendChild(h('h3', { text: 'Earlier weeks' }));
+    // history across days
+    d.appendChild(h('h3', { text: 'Earlier days' }));
     var histBox = h('div');
     d.appendChild(histBox);
     renderHistory(histBox, row.s);
@@ -921,6 +922,12 @@
       extLink('Yahoo Finance', 'https://finance.yahoo.com/quote/' + encodeURIComponent(y) + '/'),
       extLink('GuruFocus', 'https://www.gurufocus.com/stock/' + encodeURIComponent(dot) + '/summary'),
       extLink('MarketWatch estimates', 'https://www.marketwatch.com/investing/stock/' + encodeURIComponent(dot.toLowerCase()) + '/analystestimates')));
+    if (state.index && state.week === state.index.latest) {
+      d.appendChild(h('h3', { text: 'Ticker list' }));
+      d.appendChild(h('button', { type: 'button', class: 'btn', text: 'Remove ' + row.s + ' from the list',
+        on: { click: function () { setHidden(row.s, true); } } }));
+      d.appendChild(h('p', { class: 'fine', text: 'Stops fetching it and takes it off the table. Earlier days keep it, and it can be restored from Manage tickers.' }));
+    }
     close.focus();
   }
   function basisWords(code) {
@@ -936,13 +943,13 @@
   }
   function renderHistory(box, symbol) {
     var weeks = state.index.snapshots.map(function (s) { return s.as_of; }).filter(function (w) { return w <= state.week; }).slice(0, 13);
-    if (weeks.length < 2) { box.appendChild(h('p', { class: 'fine', text: 'History builds up from here: each weekly refresh adds a row.' })); return; }
+    if (weeks.length < 2) { box.appendChild(h('p', { class: 'fine', text: 'History builds up from here: each trading day adds a row.' })); return; }
     var loaded = weeks.filter(function (w) { return state.cache[w]; });
     var draw = function () {
       clear(box);
       var years = (state.snap.eps_years || []), y0 = +state.snap.as_of.slice(0, 4);
       var estYear = years.filter(function (y) { return y >= y0; })[1] || y0 + 1;
-      var t = h('table', { class: 'mini' }, h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'Week ending' }), h('th', { scope: 'col', class: 'num', text: 'Price' }),
+      var t = h('table', { class: 'mini' }, h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'Close of' }), h('th', { scope: 'col', class: 'num', text: 'Price' }),
         h('th', { scope: 'col', class: 'num', text: estYear + ' EPS' }), h('th', { scope: 'col', class: 'num', text: 'Market cap' }), h('th', { scope: 'col', class: 'num', text: 'Z' }), h('th', { scope: 'col', class: 'num', text: 'F' }))));
       var tb = h('tbody');
       weeks.forEach(function (w) {
@@ -960,7 +967,7 @@
       t.appendChild(tb);
       box.appendChild(t);
       if (loaded.length < weeks.length) {
-        box.appendChild(h('p', { class: 'fine' }, h('button', { type: 'button', class: 'link-btn', text: weeks.length === 2 ? 'Load the previous week' : 'Load the previous ' + (weeks.length - 1) + ' weeks',
+        box.appendChild(h('p', { class: 'fine' }, h('button', { type: 'button', class: 'link-btn', text: weeks.length === 2 ? 'Load the previous day' : 'Load the previous ' + (weeks.length - 1) + ' snapshots',
           on: { click: function (ev) {
             ev.target.disabled = true;
             ev.target.textContent = 'Loading…';
@@ -996,11 +1003,11 @@
         h('div', { class: 'facts' },
           h('span', null, 'Job last ran ', h('b', { text: st.last_check ? fmtStamp(st.last_check) : 'never' }), st.last_check ? ' (' + ago(st.last_check) + ')' : ''),
           h('span', null, 'Data last fetched ', h('b', { text: st.last_refresh ? fmtStamp(st.last_refresh) : 'never' })),
-          h('span', null, 'Reporting week ending ', h('b', { text: st.as_of ? fmtDay(st.as_of, true) : '—' })),
+          h('span', null, 'Reporting the close of ', h('b', { text: st.as_of ? fmtDay(st.as_of, true) : '\u2014' })),
           st.duration_s != null ? h('span', null, 'Took ', h('b', { text: Math.max(1, Math.round(st.duration_s / 60)) + ' min' })) : null)),
       h('p', { class: 'lead', style: 'margin-top:10px', text: st.headline || '' }),
-      h('p', { class: 'fine', text: 'The job runs every day. The first run after the week closes does the full refresh; later runs retry anything that failed, or simply check in. ' +
-        'When a source fails, last week’s figures stay on screen marked ◷ until a retry succeeds.' }),
+      h('p', { class: 'fine', text: 'The job runs three times every morning before the open and reports the previous trading day\u2019s close (weekends and market holidays are skipped). The first run does the full refresh; the later ones retry anything that failed, or simply check in. ' +
+        'Daily snapshots are kept for 90 days, then one per week. When a source fails, the previous day\u2019s figures stay on screen marked \u25f7 until a retry succeeds.' }),
       links.actions ? h('div', { class: 'links' }, extLink('Job runs and logs', links.actions), links.run ? extLink('Latest run', links.run) : null, links.issues ? extLink('Open issues', links.issues) : null) : null);
     wrap.appendChild(head);
 
@@ -1008,7 +1015,7 @@
 
     // sources
     var srcCard = h('div', { class: 'card' }, h('h2', { text: 'Sources' }),
-      h('p', { class: 'lead', text: 'One row per feed. “Carried over” means this week’s fetch failed and last week’s value is being shown.' }));
+      h('p', { class: 'lead', text: 'One row per feed. \u201cCarried over\u201d means the latest fetch failed and the previous value is being shown.' }));
     var t = h('table', { class: 'htable' }, h('thead', null, h('tr', null,
       h('th', { scope: 'col', text: 'Feed' }), h('th', { scope: 'col', text: 'Status' }), h('th', { scope: 'col', class: 'n', text: 'Fresh' }),
       h('th', { scope: 'col', class: 'n', text: 'Carried over' }), h('th', { scope: 'col', class: 'n', text: 'Unavailable' }),
@@ -1050,7 +1057,7 @@
         h('td', null, h('div', null, h('b', { text: 'Exchange rates' })), h('div', { class: 'what', text: 'Yahoo Finance · converts ' + fx.currencies.join(', ') + ' into USD' })),
         h('td', null, badge((fx.failed || []).length ? 'degraded' : 'ok')),
         h('td', { class: 'n', text: String(fx.currencies.length - (fx.failed || []).length) }), h('td', { class: 'n', colspan: '3' }),
-        h('td', null, h('span', { class: 'what', text: (fx.failed || []).length ? 'No rate for ' + fx.failed.join(', ') + ': companies reporting in these currencies keep last week’s fundamentals.' : 'Nothing' }))));
+        h('td', null, h('span', { class: 'what', text: (fx.failed || []).length ? 'No rate for ' + fx.failed.join(', ') + ': companies reporting in these currencies keep the previous fundamentals.' : 'Nothing' }))));
     }
     t.appendChild(tb);
     srcCard.appendChild(h('div', { class: 'scroll-x' }, t));
@@ -1132,7 +1139,7 @@
     else {
       var rt = h('table', { class: 'htable' }, h('thead', null, h('tr', null, h('th', { scope: 'col', text: 'When' }), h('th', { scope: 'col', text: 'Kind' }), h('th', { scope: 'col', text: 'Result' }), h('th', { scope: 'col', text: 'Summary' }))));
       var rb = h('tbody');
-      var kinds = { full: 'Full refresh', retry: 'Retry', heartbeat: 'Check-in', crash: 'Crashed', manual: 'Hand-entered figures' };
+      var kinds = { full: 'Full refresh', retry: 'Retry', heartbeat: 'Check-in', crash: 'Crashed', manual: 'Hand-entered figures', update: 'List or figures updated' };
       state.runs.slice(0, 25).forEach(function (r) {
         rb.appendChild(h('tr', null, h('td', { style: 'white-space:nowrap' }, r.run ? extLink(fmtStamp(r.ts), r.run) : fmtStamp(r.ts)),
           h('td', { style: 'white-space:nowrap', text: kinds[r.mode] || r.mode || '' }), h('td', null, badge(r.overall || 'ok')),
@@ -1143,6 +1150,421 @@
     }
     two.appendChild(runs);
     wrap.appendChild(two);
+  }
+
+  // ------------------------------------------------------------------ ticker list editing (through GitHub)
+  /* The dashboard is static, so changes to the ticker list are saved by committing universe.csv to the
+     repository through GitHub's API, with a token the person pastes in once. The commit starts the data
+     job, which fetches only what changed; this panel follows that run and reloads the page when it ends.
+     The token stays in this browser and is sent only to api.github.com. */
+  var GH = { api: 'https://api.github.com', file: 'universe.csv', branch: 'main', workflow: 'refresh.yml' };
+  var TOKEN_KEY = 'eu.gh.token';
+  var TICKER_RE = /^[A-Z0-9][A-Z0-9./-]{0,9}$/;
+  var manage = { user: null, universe: null, loading: false, jobs: [], message: null, hiddenNow: {} };
+
+  function repoSlug() {
+    var link = ((state.status || {}).links || {}).repo || '';
+    var m = link.match(/github\.com\/([^/]+\/[^/#?]+)/);
+    if (m) return m[1];
+    var host = location.hostname.match(/^([^.]+)\.github\.io$/), first = location.pathname.split('/').filter(Boolean)[0];
+    return host && first ? host[1] + '/' + first : null;
+  }
+  function getToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+  function setToken(token, remember) {
+    try {
+      sessionStorage.removeItem(TOKEN_KEY);
+      localStorage.removeItem(TOKEN_KEY);
+      if (token) (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
+    } catch (e) { /* storage blocked: the token then lasts only until the page is reloaded */ manage.memoryToken = token; }
+  }
+  function token() { return getToken() || manage.memoryToken || ''; }
+
+  function gh(method, path, body) {
+    var headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+    if (token()) headers.Authorization = 'Bearer ' + token();
+    if (body) headers['Content-Type'] = 'application/json';
+    return fetch(GH.api + path, { method: method, headers: headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined })
+      .then(function (res) {
+        return res.text().then(function (text) {
+          var data = null;
+          try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+          if (!res.ok) {
+            var err = new Error(ghMessage(res.status, data));
+            err.status = res.status;
+            throw err;
+          }
+          return data;
+        });
+      });
+  }
+  function ghMessage(status, data) {
+    var msg = (data && data.message) || ('GitHub answered HTTP ' + status);
+    if (status === 401) return 'GitHub did not accept the token - it may have expired or been revoked. Connect again with a new one.';
+    if (status === 403 && /not accessible|permission/i.test(msg)) return 'The token is missing a permission. It needs Contents “Read and write” (and Actions “Read and write” for Refresh now) on ' + repoSlug() + '.';
+    if (status === 403 && /rate limit/i.test(msg)) return 'GitHub’s request limit was reached - try again in a few minutes.';
+    if (status === 404) return 'GitHub could not find ' + repoSlug() + ' with this token - check the token was given access to that repository.';
+    return msg;
+  }
+  function b64decode(b64) {
+    var bin = atob(String(b64).replace(/\s/g, '')), bytes = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder('utf-8').decode(bytes);
+  }
+  function b64encode(text) {
+    var bytes = new TextEncoder().encode(text), bin = '';
+    for (var i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  // universe.csv, edited line by line so untouched rows stay byte-for-byte the same
+  function csvSplit(line) {
+    var out = [], cur = '', quoted = false;
+    for (var i = 0; i < line.length; i++) {
+      var c = line[i];
+      if (quoted) {
+        if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else quoted = false; } else cur += c;
+      } else if (c === '"') quoted = true;
+      else if (c === ',') { out.push(cur); cur = ''; } else cur += c;
+    }
+    out.push(cur);
+    return out;
+  }
+  function csvField(value) {
+    var v = value == null ? '' : String(value);
+    return /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  }
+  function parseUniverse(text) {
+    var eol = text.indexOf('\r\n') >= 0 ? '\r\n' : '\n';
+    var lines = text.split(/\r?\n/), trailing = lines.length > 1 && lines[lines.length - 1] === '';
+    if (trailing) lines.pop();
+    var header = csvSplit(lines[0] || '').map(function (x) { return x.trim().toLowerCase(); });
+    if (header.indexOf('symbol') < 0) throw new Error('universe.csv in the repository has no symbol column - it needs fixing by hand.');
+    if (header.indexOf('hidden') < 0) { header.push('hidden'); lines[0] += ',hidden'; }
+    return { eol: eol, header: header, lines: lines, trailing: trailing };
+  }
+  function universeRows(u) {
+    return u.lines.slice(1).map(function (line, i) {
+      var f = csvSplit(line), row = { _i: i + 1 };
+      u.header.forEach(function (key, j) { row[key] = (f[j] || '').trim(); });
+      return row;
+    }).filter(function (r) { return r.symbol; });
+  }
+  function setUniverseRow(u, index, row) {
+    u.lines[index] = u.header.map(function (key) { return csvField(row[key] || ''); }).join(',');
+  }
+  function universeText(u) { return u.lines.join(u.eol) + (u.trailing ? u.eol : ''); }
+  function isHiddenValue(v) { return /^(1|y|yes|true|x|hidden)$/i.test(String(v || '').trim()); }
+  function symbolKey(s) { return String(s || '').toUpperCase().replace(/[.\-]/g, '/'); }
+  function normaliseSymbol(text) {
+    var s = String(text || '').trim().toUpperCase();
+    if (/^[A-Z]{1,6}[.\-][A-Z]$/.test(s)) s = s.replace(/[.\-]/, '/');   // share classes: BRK.B / BRK-B -> BRK/B, as in the workbook
+    return s;
+  }
+
+  function addMutation(symbol, extra) {
+    return function (u) {
+      var rows = universeRows(u), key = symbolKey(symbol);
+      var found = rows.filter(function (r) { return symbolKey(r.symbol) === key; })[0];
+      if (found) {
+        if (!isHiddenValue(found.hidden)) throw new Error(found.symbol + ' is already in the list.');
+        found.hidden = '';
+        ['name', 'country', 'sector', 'industry'].forEach(function (k) { if (extra[k] && !found[k]) found[k] = extra[k]; });
+        setUniverseRow(u, found._i, found);
+        return { kind: 'restored', symbol: found.symbol };
+      }
+      var row = { symbol: symbol, name: extra.name || '', country: extra.country || '', sector: extra.sector || '', industry: extra.industry || '', hidden: '' };
+      var after = rows.filter(function (r) { return r.symbol > symbol; })[0];        // keep the file in symbol order
+      var index = after ? after._i : u.lines.length;
+      u.lines.splice(index, 0, '');
+      setUniverseRow(u, index, row);
+      return { kind: 'added', symbol: symbol };
+    };
+  }
+  function hideMutation(symbol, hide) {
+    return function (u) {
+      var rows = universeRows(u), key = symbolKey(symbol);
+      var found = rows.filter(function (r) { return symbolKey(r.symbol) === key; })[0];
+      if (!found) throw new Error(symbol + ' is not in the ticker list.');
+      if (isHiddenValue(found.hidden) === hide) throw new Error(found.symbol + (hide ? ' has already been removed.' : ' is already in the list.'));
+      if (hide && rows.filter(function (r) { return !isHiddenValue(r.hidden); }).length <= 1) throw new Error('At least one ticker has to stay in the list.');
+      found.hidden = hide ? '1' : '';
+      setUniverseRow(u, found._i, found);
+      return { kind: hide ? 'removed' : 'restored', symbol: found.symbol };
+    };
+  }
+  /* Read universe.csv, apply the change, write it back. If someone else changed the file in between,
+     GitHub refuses the write; the change is then re-applied to the new version once. */
+  function editUniverse(mutate, message, retried) {
+    var slug = repoSlug();
+    return gh('GET', '/repos/' + slug + '/contents/' + GH.file + '?ref=' + GH.branch).then(function (file) {
+      var u = parseUniverse(b64decode(file.content));
+      var result = mutate(u);
+      return gh('PUT', '/repos/' + slug + '/contents/' + GH.file,
+        { message: message, content: b64encode(universeText(u)), sha: file.sha, branch: GH.branch }).then(function (res) {
+        manage.universe = u;
+        result.commit = res && res.commit && res.commit.sha;
+        return result;
+      });
+    }).catch(function (err) {
+      if ((err.status === 409 || err.status === 422) && !retried) return editUniverse(mutate, message, true);
+      throw err;
+    });
+  }
+  function loadUniverse() {
+    manage.loading = true;
+    return gh('GET', '/repos/' + repoSlug() + '/contents/' + GH.file + '?ref=' + GH.branch).then(function (file) {
+      manage.universe = parseUniverse(b64decode(file.content));
+    }).catch(function (err) { manage.message = { level: 'error', text: err.message }; })
+      .then(function () { manage.loading = false; renderManage(); });
+  }
+
+  // following the data job a change starts
+  function startJob(label, result) {
+    var job = { label: label, symbol: result && result.symbol, kind: result && result.kind, commit: result && result.commit,
+      started: Date.now(), state: 'queued', note: 'Saved. Waiting for GitHub to start the update…' };
+    manage.jobs.unshift(job);
+    manage.jobs = manage.jobs.slice(0, 8);
+    renderManage();
+    pollJob(job);
+    return job;
+  }
+  function pollJob(job) {
+    var slug = repoSlug();
+    var path = job.runId ? '/actions/runs/' + job.runId
+      : job.commit ? '/actions/runs?head_sha=' + job.commit + '&per_page=1'
+        : '/actions/workflows/' + GH.workflow + '/runs?branch=' + GH.branch + '&per_page=5';
+    gh('GET', '/repos/' + slug + path).then(function (data) {
+      var run = job.runId ? data : ((data && data.workflow_runs) || []).filter(function (r) {
+        return job.commit || new Date(r.created_at).getTime() >= job.started - 60000;
+      })[0];
+      if (run) {
+        job.runId = run.id;
+        job.url = run.html_url;
+        if (run.status !== 'completed') {
+          job.state = run.status === 'in_progress' ? 'running' : 'queued';
+          job.note = run.status === 'in_progress' ? 'Updating the data… (usually 2–5 minutes)' : 'Queued behind another update…';
+        } else if (run.conclusion === 'cancelled' || run.conclusion === 'skipped') {
+          // superseded: a newer queued run (which starts from the latest commit, so includes this change) took its place
+          job.runId = null;
+          job.commit = null;
+          job.started = new Date(run.updated_at || Date.now()).getTime();
+          job.note = 'Handed over to a newer update that includes this change…';
+        } else {
+          job.state = run.conclusion === 'success' ? 'done' : 'failed';
+          job.note = run.conclusion === 'success' ? 'Done.' : 'The update run did not finish cleanly - see Data health.';
+          renderManage();
+          return reloadData().then(function () { describeOutcome(job); renderManage(); });
+        }
+      }
+      renderManage();
+      if (Date.now() - job.started > 25 * 60000) {
+        job.state = 'failed';
+        job.note = 'No result after 25 minutes - check the run log on GitHub.';
+        renderManage();
+        return;
+      }
+      setTimeout(function () { pollJob(job); }, 10000);
+    }).catch(function (err) {
+      job.note = 'Could not check progress (' + err.message + '). Retrying…';
+      renderManage();
+      setTimeout(function () { pollJob(job); }, 20000);
+    });
+  }
+  function describeOutcome(job) {
+    if (!job.symbol || job.state !== 'done') return;
+    var row = state.snap && state.snap.rows.filter(function (r) { return symbolKey(r.s) === symbolKey(job.symbol); })[0];
+    if (job.kind === 'removed') {
+      job.note = row ? 'Saved, but ' + job.symbol + ' is still in the latest data - reload in a minute.' : job.symbol + ' is no longer shown.';
+    } else if (!row) {
+      job.note = job.symbol + ' was saved but is not in the data yet - reload in a minute.';
+    } else if ((row.st || {}).q === 'n') {
+      job.state = 'failed';
+      job.note = 'Yahoo Finance has no prices for ' + job.symbol + '. Check the symbol (as Yahoo shows it; OTC ADRs usually end in Y or F) and remove it if it is wrong.';
+    } else {
+      job.note = job.symbol + ' is in the table' + (row.price != null ? ' (close ' + fmtNum(row.price, 2) + ')' : '') + '.';
+    }
+  }
+  /* Reload index, status and the latest snapshot after the job has run. */
+  function reloadData() {
+    state.cache = {};
+    return Promise.all([getJSON('data/index.json'), getJSON('data/status.json').catch(function () { return state.status; }),
+      getJSON('data/runs.json').catch(function () { return state.runs; })]).then(function (res) {
+      state.index = res[0];
+      state.status = res[1];
+      state.runs = Array.isArray(res[2]) ? res[2] : [];
+      manage.hiddenNow = {};
+      fillWeekSelect(state.index.snapshots.map(function (s) { return s.as_of; }));
+      renderHealthPill();
+      return showWeek(state.index.latest);
+    });
+  }
+
+  // actions
+  function connect(tokenText, remember) {
+    var tok = String(tokenText || '').trim();
+    if (!tok) return Promise.resolve(showManageMessage('error', 'Paste the token first.'));
+    setToken(tok, remember);
+    manage.memoryToken = tok;
+    showManageMessage('info', 'Checking the token…');
+    return gh('GET', '/repos/' + repoSlug()).then(function (repo) {
+      if (repo.permissions && !repo.permissions.push) throw new Error('This GitHub account can see ' + repoSlug() + ' but cannot change it. Ask the owner to add it as a collaborator.');
+      return gh('GET', '/user');
+    }).then(function (user) {
+      manage.user = user && user.login;
+      manage.message = null;
+      return loadUniverse();
+    }).catch(function (err) {
+      setToken('', false);
+      manage.memoryToken = '';
+      manage.user = null;
+      showManageMessage('error', err.message);
+    });
+  }
+  function disconnect() {
+    setToken('', false);
+    manage.memoryToken = '';
+    manage.user = null;
+    manage.universe = null;
+    showManageMessage('info', 'Disconnected. The token is no longer stored in this browser (it still works until you revoke it on GitHub).');
+  }
+  function showManageMessage(level, text) {
+    manage.message = { level: level, text: text };
+    renderManage();
+  }
+  function addTicker(form) {
+    var symbol = normaliseSymbol(form.symbol.value);
+    if (!TICKER_RE.test(symbol)) return showManageMessage('error', '“' + form.symbol.value + '” is not a valid ticker symbol.');
+    var extra = { name: form.company.value.trim(), country: form.country.value.trim() };
+    form.querySelector('button[type=submit]').disabled = true;
+    showManageMessage('info', 'Saving ' + symbol + '…');
+    return editUniverse(addMutation(symbol, extra), 'tickers: add ' + symbol + ' (from the dashboard)').then(function (result) {
+      manage.message = null;
+      form.reset();
+      startJob((result.kind === 'restored' ? 'Restore ' : 'Add ') + result.symbol, result);
+    }).catch(function (err) { showManageMessage('error', err.message); })
+      .then(function () { var b = form.querySelector('button[type=submit]'); if (b) b.disabled = false; });
+  }
+  function setHidden(symbol, hide) {
+    if (!token()) { openManage(); return showManageMessage('info', 'Connect this page to GitHub first (below), then try again.'); }
+    if (hide && !window.confirm('Remove ' + symbol + ' from the list?\n\nIt stops being fetched and disappears from the table within a few minutes. Earlier days still show it, and you can restore it from Manage tickers.')) return;
+    showManageMessage('info', (hide ? 'Removing ' : 'Restoring ') + symbol + '…');
+    return editUniverse(hideMutation(symbol, hide), 'tickers: ' + (hide ? 'remove ' : 'restore ') + symbol + ' (from the dashboard)').then(function (result) {
+      manage.message = null;
+      if (hide) {
+        manage.hiddenNow[symbolKey(symbol)] = true;   // take it off the table straight away
+        if (state.selected && symbolKey(state.selected) === symbolKey(symbol)) closeDrawer();
+        state.rowCache = { layout: null, els: {} };
+        renderTable();
+      }
+      startJob((hide ? 'Remove ' : 'Restore ') + result.symbol, result);
+    }).catch(function (err) { showManageMessage('error', err.message); });
+  }
+  function refreshNow() {
+    showManageMessage('info', 'Asking GitHub to run the update…');
+    return gh('POST', '/repos/' + repoSlug() + '/actions/workflows/' + GH.workflow + '/dispatches', { ref: GH.branch, inputs: { force: 'false' } })
+      .then(function () { manage.message = null; startJob('Refresh now', null); })
+      .catch(function (err) { showManageMessage('error', err.message); });
+  }
+
+  // the panel
+  function openManage() {
+    closeDrawer();
+    $('manage').hidden = false;
+    renderManage();
+    if (token() && !manage.user) connect(token(), !!(function () { try { return localStorage.getItem(TOKEN_KEY); } catch (e) { return ''; } })());
+    else if (token() && !manage.universe && !manage.loading) loadUniverse();
+  }
+  function closeManage() { $('manage').hidden = true; }
+  function tokenLink() {
+    var owner = (repoSlug() || '').split('/')[0];
+    return 'https://github.com/settings/personal-access-tokens/new?' + [
+      'name=' + encodeURIComponent('Equity dashboard - tickers'),
+      'description=' + encodeURIComponent('Lets the dashboard add and remove tickers in ' + repoSlug()),
+      'target_name=' + encodeURIComponent(owner), 'expires_in=90', 'contents=write', 'actions=write'].join('&');
+  }
+  function renderManage() {
+    var box = $('manage');
+    if (box.hidden) return;
+    clear(box);
+    var close = h('button', { type: 'button', class: 'icon-btn close', 'aria-label': 'Close', text: '×', on: { click: closeManage } });
+    box.appendChild(h('header', null, h('div', null, h('h2', { text: 'Manage tickers' }),
+      h('div', { class: 'who', text: 'Changes are saved to the ticker list in the repository and show up here a few minutes later.' })), close));
+    if (manage.message) {
+      box.appendChild(h('div', { class: 'note-box ' + manage.message.level, role: manage.message.level === 'error' ? 'alert' : 'status', text: manage.message.text }));
+    }
+    if (!token() || !manage.user) {
+      renderConnect(box);
+    } else {
+      renderConnected(box);
+    }
+    close.focus({ preventScroll: true });
+  }
+  function renderConnect(box) {
+    box.appendChild(h('h3', { text: 'Connect this page to GitHub' }));
+    box.appendChild(h('p', { class: 'fine', text: 'This page is a static website, so it saves changes by editing the ticker list in the GitHub repository on your behalf. That needs a GitHub access token that can edit ' + (repoSlug() || 'the repository') + '. One-time setup:' }));
+    box.appendChild(h('ol', { class: 'steps' },
+      h('li', null, h('a', { href: tokenLink(), target: '_blank', rel: 'noopener noreferrer', text: 'Open GitHub’s token page ↗' }), ' (signed in as the repository owner). Name, permissions and a 90-day expiry are filled in.'),
+      h('li', { text: 'Under “Repository access” choose “Only select repositories” and pick ' + ((repoSlug() || '').split('/')[1] || 'this repository') + '.' }),
+      h('li', { text: 'Press “Generate token”, copy it, and paste it here.' })));
+    var form = h('form', { class: 'mform', autocomplete: 'off' },
+      h('label', { class: 'field' }, h('span', { text: 'GitHub token' }), h('input', { type: 'password', name: 'token', placeholder: 'github_pat_…', spellcheck: 'false', required: true })),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'remember' }), ' Remember on this browser (otherwise forgotten when the tab closes)'),
+      h('div', null, h('button', { type: 'submit', class: 'btn primary', text: 'Connect' })));
+    form.addEventListener('submit', function (e) { e.preventDefault(); connect(form.token.value, form.remember.checked); });
+    box.appendChild(form);
+    box.appendChild(h('p', { class: 'fine', text: 'The token is kept only in this browser and is sent only to GitHub. Anyone who has it can change this repository, so do not share it; it expires after 90 days and can be revoked any time at github.com → Settings → Developer settings → Personal access tokens.' }));
+  }
+  function renderConnected(box) {
+    box.appendChild(h('p', { class: 'fine' }, 'Connected as ', h('b', { text: manage.user }), ' · ',
+      h('button', { type: 'button', class: 'link-btn', text: 'Disconnect', on: { click: disconnect } })));
+
+    box.appendChild(h('h3', { text: 'Add a ticker' }));
+    var form = h('form', { class: 'mform', autocomplete: 'off' },
+      h('div', { class: 'row3' },
+        h('label', { class: 'field' }, h('span', { text: 'Symbol' }), h('input', { name: 'symbol', required: true, maxlength: 10, placeholder: 'e.g. NVO', spellcheck: 'false' })),
+        h('label', { class: 'field' }, h('span', { text: 'Company (optional)' }), h('input', { name: 'company', maxlength: 80 })),
+        h('label', { class: 'field' }, h('span', { text: 'Country (optional)' }), h('input', { name: 'country', maxlength: 40, placeholder: 'e.g. Denmark' }))),
+      h('div', null, h('button', { type: 'submit', class: 'btn primary', text: 'Add' })));
+    form.addEventListener('submit', function (e) { e.preventDefault(); addTicker(form); });
+    box.appendChild(form);
+    box.appendChild(h('p', { class: 'fine', text: 'Use the symbol Yahoo Finance shows (OTC ADRs usually end in Y or F; share classes as BRK/B or BRK-B). The job fetches just the new ticker; it appears in the table in about 3–5 minutes. Country is filled in automatically only for NYSE/Nasdaq listings, so give it for OTC tickers.' }));
+
+    if (manage.jobs.length) {
+      box.appendChild(h('h3', { text: 'Recent changes' }));
+      var ul = h('ul', { class: 'jobs' });
+      manage.jobs.forEach(function (job) {
+        var mark = job.state === 'done' ? '✓' : job.state === 'failed' ? '!' : '…';
+        ul.appendChild(h('li', { class: 'job-' + job.state },
+          h('span', { class: 'jmark', 'aria-hidden': 'true', text: mark }),
+          h('div', null, h('b', { text: job.label }), h('div', { class: 'fine', text: job.note }),
+            job.url ? extLink('Run log', job.url) : null)));
+      });
+      box.appendChild(ul);
+    }
+
+    box.appendChild(h('h3', { text: 'Removed tickers' }));
+    if (!manage.universe) {
+      box.appendChild(h('p', { class: 'fine', text: manage.loading ? 'Loading the list…' : 'The list could not be loaded.' }));
+    } else {
+      var hidden = universeRows(manage.universe).filter(function (r) { return isHiddenValue(r.hidden); });
+      if (!hidden.length) box.appendChild(h('p', { class: 'fine', text: 'None. Remove a ticker from its detail panel (click its row).' }));
+      else {
+        var list = h('ul', { class: 'hidden-list' });
+        hidden.forEach(function (r) {
+          list.appendChild(h('li', null, h('span', null, h('b', { text: r.symbol }), r.name ? ' · ' + r.name : ''),
+            h('button', { type: 'button', class: 'btn small', text: 'Restore', on: { click: function () { setHidden(r.symbol, false); } } })));
+        });
+        box.appendChild(list);
+      }
+      var visible = universeRows(manage.universe).length - hidden.length;
+      box.appendChild(h('p', { class: 'fine', text: visible + ' tickers in the list, ' + hidden.length + ' removed. Removed tickers stay in universe.csv (marked hidden) so they keep their workbook labels when restored.' }));
+    }
+
+    box.appendChild(h('h3', { text: 'Refresh' }));
+    box.appendChild(h('p', { class: 'fine', text: 'The data updates on its own every morning before the open. Use this to retry now if something failed, or to pick up files you uploaded.' }));
+    box.appendChild(h('button', { type: 'button', class: 'btn', text: 'Run the update now', on: { click: refreshNow } }));
   }
 
   // ------------------------------------------------------------------ view switching + events
@@ -1171,9 +1593,14 @@
     $('f-missing').addEventListener('change', function (e) { state.filters.missing = e.target.value; renderTable(); });
     $('export').addEventListener('click', exportCsv);
     $('template').addEventListener('click', blankSheet);
+    $('manage-open').addEventListener('click', openManage);
     $('grid-body').addEventListener('click', function (e) { rowFromEvent(e, true); });
     $('grid-body').addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); rowFromEvent(e, false); } });
-    document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('drawer').hidden) closeDrawer(); });
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      if (!$('manage').hidden) closeManage();
+      else if (!$('drawer').hidden) closeDrawer();
+    });
   }
   function rowFromEvent(e, toggle) {
     var tr = e.target.closest ? e.target.closest('tr') : null;

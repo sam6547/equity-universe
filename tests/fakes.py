@@ -7,15 +7,28 @@ import urllib.parse
 from pipeline import dates
 
 
-def chart_payload(as_of, price=100.0, weeks=560, dividend=0.25, currency="USD", exchange="NYQ", name="Test Co",
+def trading_days_back(as_of, count):
+    """`count` trading days ending at as_of, oldest first."""
+    days, day = [], as_of
+    while len(days) < count:
+        if dates.is_trading_day(day):
+            days.append(day)
+        day -= dt.timedelta(days=1)
+    return days[::-1]
+
+
+def chart_payload(as_of, price=100.0, sessions=1620, dividend=0.25, currency="USD", exchange="NYQ", name="Test Co",
                   last_div=None, gmtoffset=-18000):
-    """Weekly bars up to and including the week AFTER as_of (so 'future' bars must be ignored)."""
-    monday = dates.week_monday(as_of)
+    """Daily bars up to as_of, plus one bar for the NEXT trading day (so 'future' bars must be ignored).
+
+    The close falls 0.01% per trading day going back: the bar i sessions before as_of closes at price * (1 - 0.0001 * i).
+    """
+    days = trading_days_back(as_of, sessions) + [dates.next_trading_day(as_of)]
     stamps, closes, highs, lows = [], [], [], []
-    for i in range(weeks, -2, -1):          # ... as_of week (i=0), following week (i=-1)
-        day = monday - dt.timedelta(days=7 * i)
-        close = round(price * (1 - 0.0005 * i), 4) if i >= 0 else price * 3   # the future bar is wildly different
-        stamps.append(dates.to_epoch(day) + 14 * 3600 + 1800)
+    for n, day in enumerate(days):
+        i = len(days) - 2 - n                  # sessions before as_of; -1 for the future bar
+        close = round(price * (1 - 0.0001 * i), 4) if i >= 0 else price * 3   # the future bar is wildly different
+        stamps.append(dates.to_epoch(day) + 14 * 3600 + 1800)   # 09:30 New York, as Yahoo stamps daily bars
         closes.append(close)
         highs.append(close * 1.02)
         lows.append(close * 0.98)
@@ -38,14 +51,14 @@ def chart_payload(as_of, price=100.0, weeks=560, dividend=0.25, currency="USD", 
 
 
 def series_payload(as_of, start_value=100.0, years=31, growth=0.07, gmtoffset=0):
-    """An index or currency pair growing at a steady rate, weekly."""
-    monday = dates.week_monday(as_of)
-    weeks = int(years * 52.2)
+    """An index or currency pair growing at a steady rate, one point per weekday."""
     stamps, closes = [], []
-    for i in range(weeks, -1, -1):
-        day = monday - dt.timedelta(days=7 * i)
-        stamps.append(dates.to_epoch(day) + 12 * 3600)
-        closes.append(start_value * (1 + growth) ** (-(7 * i) / 365.25))
+    day = as_of - dt.timedelta(days=int(years * 365.25))
+    while day <= as_of:
+        if day.weekday() < 5:
+            stamps.append(dates.to_epoch(day) + 12 * 3600)
+            closes.append(start_value * (1 + growth) ** (-((as_of - day).days) / 365.25))
+        day += dt.timedelta(days=1)
     return {"chart": {"result": [{"meta": {"currency": "USD", "gmtoffset": gmtoffset}, "timestamp": stamps,
                                   "indicators": {"quote": [{"close": closes, "high": closes, "low": closes}]}}], "error": None}}
 

@@ -15,12 +15,13 @@ class ChartTest(unittest.TestCase):
         meta, bars, divs = yahoo.parse_chart(fakes.chart_payload(AS_OF, **kw))
         return yahoo.quote_fields(meta, bars, divs, AS_OF)
 
-    def test_price_is_the_as_of_week_close_not_a_later_bar(self):
+    def test_price_is_the_as_of_close_not_a_later_bar(self):
         out = self.fields(price=100.0)
-        self.assertEqual(out["price"], 100.0)            # the following week's bar (300.0) is ignored
-        self.assertEqual(out["pweek"], "2026-11-09")
+        self.assertEqual(out["price"], 100.0)            # the next trading day's bar (300.0) is ignored
+        self.assertEqual(out["pdate"], "2026-11-13")
         self.assertNotIn("plag", out)
-        self.assertAlmostEqual(out["chg1w"], 100.0 / 99.95 - 1, places=4)
+        self.assertAlmostEqual(out["chg1d"], 100.0 / 99.99 - 1, places=6)
+        self.assertAlmostEqual(out["chg1w"], 100.0 / 99.95 - 1, places=6)   # Fri Nov 6: five sessions back
 
     def test_identity_fields(self):
         out = self.fields(exchange="NMS", name="Sanofi")
@@ -36,9 +37,12 @@ class ChartTest(unittest.TestCase):
 
     def test_range_and_one_year_return(self):
         out = self.fields(price=100.0)
+        in_year = [d for d in fakes.trading_days_back(AS_OF, 300) if d > AS_OF - dt.timedelta(days=365)]
+        oldest_back = len(in_year) - 1
         self.assertAlmostEqual(out["hi52"], 102.0, places=3)
-        self.assertAlmostEqual(out["lo52"], round(100 * (1 - 0.0005 * 51) * 0.98, 4), places=3)
-        self.assertAlmostEqual(out["ret1y"], 100.0 / (100 * (1 - 0.0005 * 52)) - 1, places=4)
+        self.assertAlmostEqual(out["lo52"], round(100 * (1 - 0.0001 * oldest_back), 4) * 0.98, places=3)
+        # a year back is Thu Nov 13 2025, one session before the oldest bar inside the 52-week window
+        self.assertAlmostEqual(out["ret1y"], 100.0 / (100 * (1 - 0.0001 * (oldest_back + 1))) - 1, places=4)
 
     def test_dividends(self):
         out = self.fields(price=100.0, dividend=0.25)
@@ -65,14 +69,25 @@ class ChartTest(unittest.TestCase):
         res = payload["chart"]["result"][0]
         quote = res["indicators"]["quote"][0]
         for key in ("close", "high", "low"):
-            quote[key][-2] = None    # no trade in the as-of week
-            quote[key][-3] = None    # ... nor the week before
+            quote[key][-2] = None    # no trade on the as-of day
+            quote[key][-3] = None    # ... nor the day before
         meta, bars, divs = yahoo.parse_chart(payload)
         out = yahoo.quote_fields(meta, bars, divs, AS_OF)
         self.assertEqual(out["plag"], 2)
-        self.assertEqual(out["pweek"], "2026-10-26")
+        self.assertEqual(out["pdate"], "2026-11-11")
 
-    def test_live_point_is_merged_into_its_week(self):
+    def test_a_holiday_is_not_counted_as_a_missed_trading_day(self):
+        friday_after_thanksgiving = D(2026, 11, 27)
+        payload = fakes.chart_payload(D(2026, 11, 25))      # last bar Wed Nov 25; Thu Nov 26 is a holiday
+        res = payload["chart"]["result"][0]
+        res["timestamp"].pop()                               # drop the fixture's next-day bar (Fri Nov 27 itself)
+        for key in ("close", "high", "low"):
+            res["indicators"]["quote"][0][key].pop()
+        meta, bars, divs = yahoo.parse_chart(payload)
+        out = yahoo.quote_fields(meta, bars, divs, friday_after_thanksgiving)
+        self.assertEqual(out["plag"], 1)                     # only Friday itself is missing
+
+    def test_live_point_is_merged_into_its_day(self):
         payload = fakes.chart_payload(AS_OF)
         res = payload["chart"]["result"][0]
         friday_close = dates.to_epoch(AS_OF) + 21 * 3600   # Friday 16:00 New York
@@ -82,7 +97,12 @@ class ChartTest(unittest.TestCase):
         meta, bars, divs = yahoo.parse_chart(payload)
         out = yahoo.quote_fields(meta, bars, divs, AS_OF)
         self.assertEqual(out["price"], 101.5)
-        self.assertAlmostEqual(out["chg1w"], 101.5 / 99.95 - 1, places=4)   # still compared with the prior week
+        self.assertAlmostEqual(out["chg1d"], 101.5 / 99.99 - 1, places=4)   # still compared with the previous session
+
+    def test_intraday_bar_for_a_later_day_is_ignored(self):
+        # a retry while the market is open sees today's partial bar: the as-of close must still be reported
+        out = self.fields(price=100.0)
+        self.assertEqual(out["price"], 100.0)
 
     def test_unusable_payloads_raise(self):
         with self.assertRaises(ValueError):

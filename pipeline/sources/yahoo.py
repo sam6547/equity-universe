@@ -1,6 +1,6 @@
 """Yahoo Finance: the three JSON endpoints that answer an ordinary script.
 
-  chart                     prices (weekly bars), name, exchange, dividend history
+  chart                     prices (daily bars), name, exchange, dividend history
   fundamentals-timeseries   financial statements and valuation measures
   search                    sector and industry
 
@@ -66,10 +66,11 @@ def split_currency(code):
 # --------------------------------------------------------------------------
 # chart: prices and dividends
 # --------------------------------------------------------------------------
-def chart_url(symbol, as_of, years=10, interval="1wk", events=True):
+def chart_url(symbol, as_of, years=6.3, interval="1d", events=True):
+    """Daily bars reaching back far enough for 5-year dividend growth (5 years plus a year of payments)."""
     params = {
         "period1": dates.to_epoch(as_of - dt.timedelta(days=int(years * 365.25) + 14)),
-        "period2": dates.to_epoch(as_of + dt.timedelta(days=9)),
+        "period2": dates.to_epoch(as_of + dt.timedelta(days=2)),
         "interval": interval,
     }
     if events:
@@ -78,9 +79,9 @@ def chart_url(symbol, as_of, years=10, interval="1wk", events=True):
 
 
 def parse_chart(payload):
-    """-> (meta, weekly bars, dividends).
+    """-> (meta, daily bars, dividends).
 
-    bars: list of (week_monday, close, high, low) sorted by date, one per calendar week.
+    bars: list of (date, close, high, low) sorted by date, one per trading day (exchange-local date).
     dividends: list of (ex_date, amount) sorted by date.
     Raises ValueError when the payload has no usable price series.
     """
@@ -98,19 +99,19 @@ def parse_chart(payload):
     highs = quote.get("high") or []
     lows = quote.get("low") or []
 
-    weeks = collections.OrderedDict()
+    days = collections.OrderedDict()
     for i, ts in enumerate(stamps):
         close = closes[i] if i < len(closes) else None
         if not compute.is_num(close) or close <= 0:
             continue
-        monday = dates.week_monday(dates.from_epoch(ts, offset))
+        day = dates.from_epoch(ts, offset)
         high = highs[i] if i < len(highs) and compute.is_num(highs[i]) else close
         low = lows[i] if i < len(lows) and compute.is_num(lows[i]) else close
-        prev = weeks.get(monday)
-        if prev:  # Yahoo can append a "live" point for the current week: merge it into that week's bar
+        prev = days.get(day)
+        if prev:  # Yahoo can append a "live" point for the current day: merge it into that day's bar
             high, low = max(high, prev[2]), min(low, prev[3])
-        weeks[monday] = (monday, float(close), float(high), float(low))
-    bars = sorted(weeks.values())
+        days[day] = (day, float(close), float(high), float(low))
+    bars = sorted(days.values())
     if not bars:
         raise ValueError("no prices in chart data")
 
@@ -124,13 +125,17 @@ def parse_chart(payload):
 
 
 def quote_fields(meta, bars, divs, as_of):
-    """Everything the dashboard shows from the chart endpoint, as of the week ending `as_of`."""
+    """Everything the dashboard shows from the chart endpoint, as of the close of `as_of`.
+
+    Bars after `as_of` are ignored, so a retry that runs while the market is open still
+    reports the as-of close, never an intraday price.
+    """
     usable = [b for b in bars if b[0] <= as_of]
     if not usable:
         raise ValueError("no prices on or before %s" % as_of.isoformat())
     bar = usable[-1]
     price = bar[1]
-    lag_weeks = (dates.week_monday(as_of) - bar[0]).days // 7
+    closes = [(b[0], b[1]) for b in usable]
 
     out = {
         "yname": meta.get("longName") or meta.get("shortName"),
@@ -138,17 +143,25 @@ def quote_fields(meta, bars, divs, as_of):
         "exch_raw": meta.get("fullExchangeName") or meta.get("exchangeName"),
         "cur": meta.get("currency"),
         "price": compute.round_sig(price, 7),
-        "pweek": bar[0].isoformat(),
+        "pdate": bar[0].isoformat(),
     }
-    if lag_weeks > 0:
-        out["plag"] = lag_weeks  # no trade in the as-of week: price is this many weeks old
-    if len(usable) >= 2 and (bar[0] - usable[-2][0]).days <= 21:
-        out["chg1w"] = round(price / usable[-2][1] - 1.0, 5)
-    year = [b for b in usable if b[0] > bar[0] - dt.timedelta(days=364)]
+    lag, day = 0, bar[0]
+    while day < as_of and lag < 400:
+        day = dates.next_trading_day(day)
+        lag += 1
+    if lag > 0:
+        out["plag"] = lag  # no trade on the as-of day: the price is this many trading days old
+    if len(usable) >= 2 and (bar[0] - usable[-2][0]).days <= 7:
+        out["chg1d"] = round(price / usable[-2][1] - 1.0, 5)
+    week = compute.value_on_or_before(closes, bar[0] - dt.timedelta(days=7), max_age_days=10)
+    if week:
+        out["chg1w"] = round(price / week[1] - 1.0, 5)
+    year = [b for b in usable if b[0] > bar[0] - dt.timedelta(days=365)]
     if year:
-        out["hi52"] = compute.round_sig(max(b[2] for b in year), 7)
-        out["lo52"] = compute.round_sig(min(b[3] for b in year), 7)
-    ago = compute.value_on_or_before([(b[0], b[1]) for b in usable], bar[0] - dt.timedelta(days=364), max_age_days=21)
+        # include closes: for thinly traded tickers Yahoo sometimes reports a low above the close
+        out["hi52"] = compute.round_sig(max(max(b[1], b[2]) for b in year), 7)
+        out["lo52"] = compute.round_sig(min(min(b[1], b[3]) for b in year), 7)
+    ago = compute.value_on_or_before(closes, bar[0] - dt.timedelta(days=365), max_age_days=10)
     if ago:
         out["ret1y"] = round(price / ago[1] - 1.0, 5)
 
@@ -198,10 +211,10 @@ def fetch_quote(client, symbol, as_of):
         return Result.broken("unexpected chart format: %s" % type(exc).__name__)
 
 
-def fetch_series(client, symbol, start, end, interval="1wk"):
+def fetch_series(client, symbol, start, end, interval="1d"):
     # type: (net.Client, str, dt.date, dt.date, str) -> Tuple[Optional[List[Tuple[dt.date, float]]], str]
-    """Weekly closes for an index or currency pair. -> (points or None, error)."""
-    params = urllib.parse.urlencode({"period1": dates.to_epoch(start), "period2": dates.to_epoch(end + dt.timedelta(days=9)),
+    """Daily closes for an index or currency pair, up to and including `end`. -> (points or None, error)."""
+    params = urllib.parse.urlencode({"period1": dates.to_epoch(start), "period2": dates.to_epoch(end + dt.timedelta(days=2)),
                                      "interval": interval})
     resp = client.get(CHART_URL % (urllib.parse.quote(symbol, safe=""), params))
     if not resp.ok:
@@ -210,8 +223,7 @@ def fetch_series(client, symbol, start, end, interval="1wk"):
         _meta, bars, _divs = parse_chart(json.loads(resp.body.decode("utf-8", "replace")))
     except Exception as exc:  # noqa: BLE001
         return None, "unusable chart data: %s" % exc
-    # date each weekly close by that week's Friday so "as of Friday" lookups include it
-    return [(b[0] + dt.timedelta(days=4), b[1]) for b in bars], ""
+    return [(b[0], b[1]) for b in bars if b[0] <= end], ""
 
 
 # --------------------------------------------------------------------------

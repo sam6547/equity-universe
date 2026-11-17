@@ -237,6 +237,36 @@ class DatesTest(unittest.TestCase):
         self.assertEqual(dates.last_completed_friday(D(2026, 11, 21)), D(2026, 11, 20))
         self.assertEqual(dates.last_completed_friday(D(2027, 1, 2)), D(2027, 1, 1))      # across a year end
 
+    def test_nyse_holidays(self):
+        def names(year):
+            return sorted(d.isoformat() for d in dates.market_holidays(year))
+        self.assertEqual(names(2026), ["2026-01-01", "2026-01-19", "2026-02-16", "2026-04-03", "2026-05-25", "2026-06-19",
+                                       "2026-07-03", "2026-09-07", "2026-11-26", "2026-12-25"])
+        self.assertEqual(names(2027), ["2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26", "2027-05-31", "2027-06-18",
+                                       "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24"])
+        self.assertNotIn(D(2021, 12, 31), dates.market_holidays(2021))   # Jan 1 2022 fell on a Saturday: no Friday closure
+
+    def test_new_york_time_follows_daylight_saving(self):
+        U = dt.timezone.utc
+        self.assertEqual(dates.to_eastern(dt.datetime(2026, 11, 17, 11, 17, tzinfo=U)), dt.datetime(2026, 11, 17, 6, 17))
+        self.assertEqual(dates.to_eastern(dt.datetime(2026, 7, 7, 10, 17, tzinfo=U)), dt.datetime(2026, 7, 7, 6, 17))
+        self.assertEqual(dates.to_eastern(dt.datetime(2026, 3, 8, 6, 59, tzinfo=U)), dt.datetime(2026, 3, 8, 1, 59))
+        self.assertEqual(dates.to_eastern(dt.datetime(2026, 3, 8, 7, 0, tzinfo=U)), dt.datetime(2026, 3, 8, 3, 0))
+
+    def test_last_completed_session(self):
+        U = dt.timezone.utc
+        def session(*args):
+            return dates.last_completed_session(dt.datetime(*args, tzinfo=U))
+        self.assertEqual(session(2026, 11, 17, 11, 17), D(2026, 11, 16))   # Tue 06:17 New York -> Monday's close
+        self.assertEqual(session(2026, 11, 16, 14, 5), D(2026, 11, 13))    # Mon 09:05 -> Friday's close
+        self.assertEqual(session(2026, 11, 16, 22, 59), D(2026, 11, 13))   # Mon 17:59 -> not final yet
+        self.assertEqual(session(2026, 11, 16, 23, 0), D(2026, 11, 16))    # Mon 18:00 -> final
+        self.assertEqual(session(2026, 11, 15, 12, 0), D(2026, 11, 13))    # Sunday
+        self.assertEqual(session(2026, 11, 27, 11, 0), D(2026, 11, 25))    # Fri after Thanksgiving, before the open
+        self.assertEqual(session(2027, 1, 4, 11, 0), D(2026, 12, 31))      # first Monday of the year
+        self.assertEqual(dates.next_trading_day(D(2026, 11, 25)), D(2026, 11, 27))
+        self.assertEqual(dates.previous_trading_day(D(2026, 1, 20)), D(2026, 1, 16))
+
     def test_fiscal_label_year(self):
         self.assertEqual(dates.fiscal_label_year(D(2025, 10, 31)), 2025)
         self.assertEqual(dates.fiscal_label_year(D(2026, 1, 3)), 2025)   # 53-week year ending just after New Year

@@ -25,10 +25,10 @@
   </div>
 
   <div class="week" id="week-control">
-    <button type="button" id="week-prev" class="icon-btn" aria-label="Earlier week" title="Earlier week">&#8249;</button>
-    <label class="sr-only" for="week-select">Week ending</label>
-    <select id="week-select" title="Choose which week to show"></select>
-    <button type="button" id="week-next" class="icon-btn" aria-label="Later week" title="Later week">&#8250;</button>
+    <button type="button" id="week-prev" class="icon-btn" aria-label="Earlier day" title="Earlier day">&#8249;</button>
+    <label class="sr-only" for="week-select">Close of</label>
+    <select id="week-select" title="Choose which day to show (daily for 90 days, weekly before that)"></select>
+    <button type="button" id="week-next" class="icon-btn" aria-label="Later day" title="Later day">&#8250;</button>
   </div>
 </header>
 
@@ -55,13 +55,14 @@
       <div class="actions">
         <span id="row-count" class="count"></span>
         <div id="group-toggles" class="chips" role="group" aria-label="Column groups"></div>
+        <button type="button" id="manage-open" class="btn" title="Add a ticker, or restore one that was removed">Manage tickers</button>
         <button type="button" id="export" class="btn" title="Download the rows shown, in the workbook's column order">Export CSV</button>
         <button type="button" id="template" class="btn" title="Download the tickers shown with empty columns. Fill in what you have and upload the file to the repository's manual/ folder: filled cells win, empty cells change nothing.">Blank sheet to fill in</button>
       </div>
     </div>
     <p class="key">
       <span><i>Italic</i> = analyst estimate</span>
-      <span><span class="mark stale-mark" aria-hidden="true">&#9719;</span> carried over from an earlier week</span>
+      <span><span class="mark stale-mark" aria-hidden="true">&#9719;</span> carried over from an earlier day</span>
       <span><span class="mark check-mark" aria-hidden="true">?</span> check against the source</span>
       <span><span class="alt-key">dotted underline</span> = worked out another way (hover to see how)</span>
       <span><span class="mark" aria-hidden="true">&#9998;</span> entered by hand</span>
@@ -82,6 +83,7 @@
 </main>
 
 <aside id="drawer" class="drawer" aria-label="Ticker detail" hidden></aside>
+<aside id="manage" class="drawer" aria-label="Manage tickers" hidden></aside>
 <div id="tooltip" class="tooltip" hidden></div>
 
 <noscript><p class="empty">This dashboard needs JavaScript to load its data.</p></noscript>

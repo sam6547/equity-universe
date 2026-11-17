@@ -1,15 +1,17 @@
-"""The weekly refresh.
+"""The daily refresh.
 
     python -m pipeline.run                 # normal scheduled run
-    python -m pipeline.run --force         # re-fetch everything for the current week
+    python -m pipeline.run --force         # re-fetch everything for the current trading day
     python -m pipeline.run --symbols A,SNY # trial run on a few tickers (writes to build/trial)
 
 How a run decides what to do:
-  * The week being reported is the one that closed last Friday.
-  * No snapshot for that week yet  -> full refresh.
+  * The day being reported is the latest US trading day whose close is final
+    (from 18:00 New York time; weekends and NYSE holidays are skipped).
+  * No snapshot for that day yet    -> full refresh.
   * Snapshot exists with failures   -> retry only what failed.
+  * Ticker list or hand-entered figures changed -> fetch only new tickers, rewrite the snapshot.
   * Snapshot exists and is complete -> nothing to fetch; just record that the job is alive.
-Scheduling the job daily therefore gives one refresh a week plus automatic retries.
+The schedule runs it several times each morning before the open, so a failed first run is retried.
 
 The job always writes status.json, even when sources fail or the code crashes, so the
 dashboard can show what went wrong.
@@ -41,8 +43,8 @@ def log(message):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Refresh the equity universe dashboard data.")
-    parser.add_argument("--force", action="store_true", help="re-fetch everything for the current week")
-    parser.add_argument("--as-of", help="report this Friday (YYYY-MM-DD) instead of the last one")
+    parser.add_argument("--force", action="store_true", help="re-fetch everything for the current trading day")
+    parser.add_argument("--as-of", help="report this trading day (YYYY-MM-DD) instead of the latest completed one")
     parser.add_argument("--symbols", help="comma-separated tickers for a trial run")
     parser.add_argument("--limit", type=int, help="only the first N tickers (trial run)")
     parser.add_argument("--data-dir", help="write output here instead of site/data")
@@ -70,7 +72,7 @@ def main(argv=None):
 # --------------------------------------------------------------------------
 def refresh(args, started):
     now = dates.utc_now()
-    as_of = dates.parse_date(args.as_of) if args.as_of else dates.last_completed_friday(now.date())
+    as_of = dates.parse_date(args.as_of) if args.as_of else dates.last_completed_session(now)
     as_of_iso = as_of.isoformat()
     trigger = os.environ.get("GITHUB_EVENT_NAME") or "local"
 
@@ -121,14 +123,16 @@ def refresh(args, started):
     wanted = manual.desired_overrides(e for e in hand_entries if e[0] in plan)
     hand_changed = existing is not None and any(
         (wanted.get(s) or {}) != (cur_rows.get(s, {}).get("ovr") or {}) for s in plan)
+    # tickers added, removed or hidden since the snapshot was written
+    list_changed = existing is not None and list(plan) != [r.get("s") for r in existing.get("rows", [])]
 
-    if existing is not None and not pending and not macro_todo and not hand_changed:
+    if existing is not None and not pending and not macro_todo and not hand_changed and not list_changed:
         heartbeat(as_of_iso, trigger, started)
         return
 
-    # "manual": nothing to fetch, but the hand-entered figures changed and the snapshot must show them
-    mode = "full" if existing is None else ("retry" if pending or macro_todo else "manual")
-    log("%s refresh for week ending %s: %d of %d tickers to fetch%s" % (
+    # "update": nothing to fetch, but the list or the hand-entered figures changed and the snapshot must show it
+    mode = "full" if existing is None else ("retry" if pending or macro_todo else "update")
+    log("%s for %s: %d of %d tickers to fetch%s" % (
         mode.capitalize(), as_of_iso, pending, len(plan), ", macro: " + ", ".join(macro_todo) if macro_todo else ""))
 
     client = net.Client(deadline=started + config.TIME_BUDGET_S)
@@ -318,8 +322,14 @@ def refresh(args, started):
         "attention": health.attention_list(rows), "warnings": warnings,
         "manual": {"files": manual_files, "overrides_csv": len(overrides), "stale_after_days": config.MANUAL_STALE_DAYS},
         "unavailable": list(health.UNAVAILABLE), "links": health.repo_links(),
+        "next_session": dates.next_trading_day(as_of).isoformat(),
     }
     snapshot.write_json(config.STATUS_JSON, status)
+    removed = snapshot.prune_snapshots(as_of)
+    if removed:
+        snapshot.update_index({"as_of": as_of_iso, "generated_at": snap["generated_at"], "updated_at": stamp, "overall": state,
+                               "rows": len(rows), "sources": {s["id"]: s["status"] for s in sources}})
+        log("Thinned %d daily snapshot(s) older than %d days to one per week." % (len(removed), config.DAILY_RETENTION_DAYS))
     append_run({"ts": stamp, "as_of": as_of_iso, "mode": mode, "trigger": trigger, "overall": state, "headline": head,
                 "duration_s": duration, "sources": {s["id"]: s["status"] for s in sources},
                 "requests": sum(s["requests"] for s in status["http"].values()), "run": status["links"].get("run")})
@@ -362,14 +372,15 @@ def heartbeat(as_of_iso, trigger, started):
     status = snapshot.read_json(config.STATUS_JSON, {}) or {}
     status["last_check"] = stamp
     status.setdefault("as_of", as_of_iso)
+    status["next_session"] = dates.next_trading_day(dates.parse_date(status["as_of"])).isoformat()
     links = health.repo_links()
     if links:
         status["links"] = links
     snapshot.write_json(config.STATUS_JSON, status)
     append_run({"ts": stamp, "as_of": as_of_iso, "mode": "heartbeat", "trigger": trigger,
-                "overall": status.get("overall", "ok"), "headline": "Week ending %s is complete; nothing to fetch." % as_of_iso,
+                "overall": status.get("overall", "ok"), "headline": "%s is complete; nothing to fetch." % as_of_iso,
                 "duration_s": int(time.monotonic() - started), "run": links.get("run")})
-    log("Week ending %s is already complete - nothing to fetch. Recorded check-in at %s." % (as_of_iso, stamp))
+    log("%s is already complete - nothing to fetch. Recorded check-in at %s." % (as_of_iso, stamp))
 
 
 def record_crash(exc, started):

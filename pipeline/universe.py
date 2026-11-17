@@ -7,7 +7,9 @@ from typing import Dict, List, Optional
 
 from . import config
 
-FIELDS = ("symbol", "name", "country", "sector", "industry")
+FIELDS = ("symbol", "name", "country", "sector", "industry", "hidden")
+# hidden: "1" keeps the ticker in the file (with its labels) but stops fetching and showing it.
+# The dashboard's "Remove" button sets it and "Restore" clears it.
 _TICKER = re.compile(r"^[A-Z0-9][A-Z0-9./-]{0,9}$")
 
 _COUNTRIES = {
@@ -69,9 +71,16 @@ def tidy_label(value):
     return text.title() if text.isupper() and len(text) > 4 else text
 
 
-def load(path=None):
-    # type: (object) -> List[Dict[str, str]]
-    """Rows of universe.csv in file order. Raises ValueError if the file is unusable."""
+def is_hidden(value):
+    return str(value or "").strip().lower() in ("1", "y", "yes", "true", "x", "hidden")
+
+
+def load(path=None, include_hidden=False):
+    # type: (object, bool) -> List[Dict[str, str]]
+    """Rows of universe.csv in file order (hidden tickers left out unless asked for).
+
+    Raises ValueError if the file is unusable.
+    """
     path = path or config.UNIVERSE_CSV
     rows, seen = [], set()
     with open(str(path), newline="", encoding="utf-8") as handle:
@@ -90,9 +99,12 @@ def load(path=None):
             row = {"symbol": symbol}
             for key in FIELDS[1:]:
                 row[key] = " ".join((raw.get(key) or "").split())
+            row["hidden"] = "1" if is_hidden(row["hidden"]) else ""
+            if row["hidden"] and not include_hidden:
+                continue
             rows.append(row)
     if not rows:
-        raise ValueError("%s contains no tickers" % path)
+        raise ValueError("%s contains no tickers%s" % (path, "" if include_hidden else " that are not hidden"))
     return rows
 
 

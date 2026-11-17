@@ -60,8 +60,20 @@ def main(argv):
     rows = read_workbook(argv[1])
     if not rows:
         raise SystemExit("No tickers found in %s" % argv[1])
+    # Keep what was decided on the dashboard: tickers hidden there stay hidden.
+    try:
+        current = {r["symbol"]: r for r in universe.load(include_hidden=True)}
+    except (OSError, ValueError):
+        current = {}
+    in_workbook = {r["symbol"] for r in rows}
+    for row in rows:
+        row["hidden"] = (current.get(row["symbol"]) or {}).get("hidden", "")
+    dropped = sorted(s for s, r in current.items() if s not in in_workbook and not r.get("hidden"))
     universe.save(rows)
-    print("Wrote %d tickers to %s" % (len(rows), config.UNIVERSE_CSV))
+    print("Wrote %d tickers to %s (%d hidden)" % (len(rows), config.UNIVERSE_CSV, sum(1 for r in rows if r["hidden"])))
+    if dropped:
+        print("These tickers were in universe.csv but not in the workbook, and have been dropped "
+              "(add them to the workbook, or re-add them on the dashboard): %s" % ", ".join(dropped))
 
 
 if __name__ == "__main__":

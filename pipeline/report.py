@@ -22,7 +22,7 @@ import tempfile
 from . import config, dates, snapshot
 
 LABEL = "data-refresh"
-TITLE = "Weekly data refresh needs attention"
+TITLE = "Daily data refresh needs attention"
 _REAL_RUNS = ("full", "retry", "crash")
 
 
@@ -46,7 +46,7 @@ def issue_body(status):
         "The scheduled data refresh for the equity dashboard needs a look.",
         "",
         "**Status:** %s" % status.get("overall", "unknown"),
-        "**Week ending:** %s" % status.get("as_of", "unknown"),
+        "**Trading day:** %s" % status.get("as_of", "unknown"),
         "**Last run:** %s" % status.get("last_check", "unknown"),
         "",
         "**What happened**",
@@ -77,8 +77,8 @@ def commit_message(status, runs):
     if not status:
         return "no status recorded"
     latest = (runs or [{}])[0] if isinstance(runs, list) and runs else {}
-    kind = {"full": "refresh", "retry": "retry", "heartbeat": "check-in", "crash": "crash"}.get(latest.get("mode"), "update")
-    return "%s for week ending %s (%s)" % (kind, status.get("as_of", "?"), status.get("overall", "?"))
+    kind = {"full": "refresh", "retry": "retry", "heartbeat": "check-in", "crash": "crash", "update": "update"}.get(latest.get("mode"), "update")
+    return "%s for %s (%s)" % (kind, status.get("as_of", "?"), status.get("overall", "?"))
 
 
 def record_failure(reason):

@@ -54,9 +54,9 @@ class IssueTextTest(unittest.TestCase):
 
     def test_commit_message(self):
         self.assertEqual(report.commit_message({"as_of": "2026-11-20", "overall": "ok"}, [run("full", "ok")]),
-                         "refresh for week ending 2026-11-20 (ok)")
+                         "refresh for 2026-11-20 (ok)")
         self.assertEqual(report.commit_message({"as_of": "2026-11-20", "overall": "ok"}, [run("heartbeat", "ok"), run("full", "ok")]),
-                         "check-in for week ending 2026-11-20 (ok)")
+                         "check-in for 2026-11-20 (ok)")
         self.assertEqual(report.commit_message({}, []), "no status recorded")
 
 

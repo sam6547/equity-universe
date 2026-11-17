@@ -417,7 +417,7 @@ class ManualUploadTest(PipelineCase):
         self.assertEqual(a["eps_a"]["2025"], 5.2)                          # the fetched figure is still underneath
         self.assertEqual(list(self.row(WEEK1, "BBB")["ovr"]), ["z"])       # empty cells change nothing
         status = self.status()
-        self.assertEqual(status["mode"], "manual")
+        self.assertEqual(status["mode"], "update")
         self.assertEqual(status["overall"], "ok")
         self.assertEqual(status["manual"]["files"][0]["file"], "manual/gurufocus.csv")
         self.assertEqual(status["manual"]["files"][0]["values"], 5)
@@ -432,7 +432,7 @@ class ManualUploadTest(PipelineCase):
         os.remove(str(config.MANUAL_DIR / "mine.csv"))
         self.go(WEEK1)
         self.assertNotIn("ovr", self.row(WEEK1, "AAA"))
-        self.assertEqual(self.status()["mode"], "manual")
+        self.assertEqual(self.status()["mode"], "update")
 
     def test_the_one_line_file_has_the_last_word(self):
         self.upload("mine.csv", "Symbol,Altman Z-Score,Piotroski F-Score\nAAA,5.61,7\n")
@@ -458,6 +458,77 @@ class ManualUploadTest(PipelineCase):
         self.go(WEEK1)
         self.go(WEEK2)
         self.assertEqual(self.row(WEEK2, "AAA")["ovr"]["z"][0], 5.61)
+
+
+class TickerListTest(PipelineCase):
+    def write_universe(self, text):
+        with open(str(config.UNIVERSE_CSV), "w") as handle:
+            handle.write(text)
+
+    def test_hiding_a_ticker_takes_it_out_the_same_day_without_fetching(self):
+        self.go(WEEK1)
+        calls = len(self.net.calls)
+        self.write_universe(UNIVERSE.replace("BBB,Beta SA,FRANCE,,", "BBB,Beta SA,FRANCE,,,1").replace(
+            "symbol,name,country,sector,industry", "symbol,name,country,sector,industry,hidden"))
+        self.assertEqual(self.go(WEEK1), 0)
+        self.assertEqual(len(self.net.calls), calls)
+        self.assertEqual([r["s"] for r in self.snap(WEEK1)["rows"]], ["AAA", "CCCCY", "DDD", "EEE"])
+        self.assertEqual(self.status()["mode"], "update")
+        self.go(WEEK2)                                                    # hidden tickers are not fetched on later days
+        self.assertEqual(self.net.count("/chart/BBB"), 1)
+        self.assertNotIn("BBB", snapshot.rows_by_symbol(self.snap(WEEK2)))
+
+    def test_restoring_a_hidden_ticker_fetches_it(self):
+        hidden = UNIVERSE.replace("symbol,name,country,sector,industry", "symbol,name,country,sector,industry,hidden").replace(
+            "EEE,Epsilon Ltd,,,Widgets", "EEE,Epsilon Ltd,,,Widgets,1")
+        self.write_universe(hidden)
+        self.go(WEEK1)
+        self.assertNotIn("EEE", snapshot.rows_by_symbol(self.snap(WEEK1)))
+        self.write_universe(hidden.replace("EEE,Epsilon Ltd,,,Widgets,1", "EEE,Epsilon Ltd,,,Widgets,"))
+        self.go(WEEK1)
+        e = self.row(WEEK1, "EEE")
+        self.assertEqual(e["price"], 100.0)
+        self.assertEqual(e["industry"], "Specialty Industrial Machinery")
+        self.assertEqual(self.status()["mode"], "retry")
+
+    def test_every_ticker_hidden_is_a_clear_error(self):
+        self.write_universe("symbol,name,country,sector,industry,hidden\nAAA,Alpha,,,,1\n")
+        with mock.patch("traceback.print_exc"):
+            self.assertEqual(self.go(WEEK1), 1)
+        self.assertIn("no tickers that are not hidden", self.status()["headline"])
+
+    def test_status_names_the_next_trading_day(self):
+        self.go(D(2026, 11, 25))
+        self.assertEqual(self.status()["next_session"], "2026-11-27")      # Thanksgiving skipped
+
+
+class RetentionTest(PipelineCase):
+    def test_old_days_are_thinned_to_one_per_week(self):
+        days = [D(2026, 6, 1) + dt.timedelta(days=i) for i in range(200)]
+        days = [d for d in days if d.weekday() < 5]
+        latest = days[-1]
+        pruned = set(snapshot.snapshots_to_prune(days, latest, keep_days=90))
+        kept = [d for d in days if d not in pruned]
+        self.assertTrue(all(d < latest - dt.timedelta(days=90) for d in pruned))
+        old_kept = [d for d in kept if d < latest - dt.timedelta(days=90)]
+        self.assertTrue(all(d.weekday() == 4 for d in old_kept))          # Fridays only
+        self.assertEqual(len({d.isocalendar()[:2] for d in old_kept}), len(old_kept))
+        recent = [d for d in days if d >= latest - dt.timedelta(days=90)]
+        self.assertTrue(set(recent) <= set(kept))                         # every recent day kept
+
+    def test_a_holiday_friday_keeps_the_thursday(self):
+        days = [D(2026, 4, 1), D(2026, 4, 2)]                             # Fri Apr 3 2026 is Good Friday
+        self.assertEqual(snapshot.snapshots_to_prune(days, D(2026, 12, 1), keep_days=90), [D(2026, 4, 1)])
+
+    def test_run_prunes_and_the_index_follows(self):
+        self.go(D(2026, 7, 7))
+        self.go(D(2026, 7, 8))
+        self.go(D(2026, 7, 10))
+        self.go(D(2026, 11, 13))
+        self.assertEqual([d.isoformat() for d in snapshot.list_snapshot_dates()], ["2026-07-10", "2026-11-13"])
+        index = snapshot.read_json(config.INDEX_JSON)
+        self.assertEqual([e["as_of"] for e in index["snapshots"]], ["2026-11-13", "2026-07-10"])
+        self.assertEqual(snapshot.load_previous(D(2026, 11, 13))["as_of"], "2026-07-10")
 
 
 class HealthRulesTest(unittest.TestCase):

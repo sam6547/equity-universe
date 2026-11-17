@@ -157,7 +157,7 @@ def coverage_alerts(current, previous):
     for key, now in current.items():
         before = (previous or {}).get(key)
         if before is not None and before - now > config.COVERAGE_DROP_ALERT:
-            alerts.append("%s is filled in for %d%% of tickers, down from %d%% last week - the source may be returning "
+            alerts.append("%s is filled in for %d%% of tickers, down from %d%% in the previous snapshot - the source may be returning "
                           "empty answers or have changed format." % (labels.get(key, key), round(now * 100), round(before * 100)))
     return alerts
 
@@ -168,8 +168,8 @@ def attention_list(rows, limit=60):
     for row in rows:
         if (row.get("st") or {}).get("q") == "n":
             out.append({"symbol": row["s"], "issue": "Yahoo Finance has no price history for this symbol - renamed or delisted?"})
-        elif (row.get("plag") or 0) >= 4:
-            out.append({"symbol": row["s"], "issue": "No trade recorded for %d weeks - delisted, or the ADR programme ended?" % row["plag"]})
+        elif (row.get("plag") or 0) >= 15:
+            out.append({"symbol": row["s"], "issue": "No trade recorded for %d trading days - delisted, or the ADR programme ended?" % row["plag"]})
     return out[:limit]
 
 

@@ -87,7 +87,7 @@ def _years_ago(day, years):
 # currency conversion
 # --------------------------------------------------------------------------
 class FxBook(object):
-    """Weekly exchange rates into one base currency (the currency prices trade in)."""
+    """Exchange rates into one base currency (the currency prices trade in), daily or weekly."""
 
     def __init__(self, base="USD"):
         self.base = base
@@ -100,7 +100,7 @@ class FxBook(object):
         return currency == self.base or currency in self._series
 
     def spot(self, currency, day):
-        """Rate on `day` (latest weekly close at or before it, at most 30 days old)."""
+        """Rate on `day` (latest close at or before it, at most 30 days old)."""
         if currency == self.base:
             return 1.0
         found = value_on_or_before(self._series.get(currency, ()), day, max_age_days=30)

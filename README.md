@@ -1,7 +1,7 @@
 # Equity Universe dashboard
 
 A small website that shows every ticker in the *Equity Universe* workbook with the
-workbook's columns filled in, refreshes itself once a week, keeps every past week so
+workbook's columns filled in, refreshes itself every trading day before the open, keeps past days so
 you can look back, and says so on the page when a data source lets it down.
 
 It is deliberately simple: a scheduled script writes JSON files, and a static page
@@ -70,17 +70,23 @@ What that costs, column by column (the dashboard's *Data health* tab carries the
 * **Hand entry**: upload a filled-in sheet to the `manual/` folder (see *Add figures of your
   own* below); those figures win over the fetched ones and are marked ✎.
 
-## How the weekly refresh works
+## How the daily refresh works
 
-The job runs **every day** (GitHub Actions, 11:17 UTC):
+The job reports the **previous trading day's close** and runs three times every morning
+(GitHub Actions; times are UTC, so New York times shift by an hour with daylight saving):
 
-1. It works out which week to report: the one that closed last Friday.
-2. No snapshot for that week yet → **full refresh** (about 20 minutes, ~3,400 polite requests).
-3. Snapshot exists but something failed → **retry only what failed**.
-4. Snapshot complete → nothing to fetch; it just **checks in** so the page knows the job is alive.
+| UTC   | New York (winter / summer) | What it does |
+|-------|----------------------------|--------------|
+| 10:17 | 5:17 am / 6:17 am          | full refresh, about 20 minutes, ~3,900 polite requests |
+| 11:17 | 6:17 am / 7:17 am          | retries anything that failed, otherwise just checks in |
+| 12:17 | 7:17 am / 8:17 am          | last retry, still well before the 9:30 open |
 
-So you get one refresh a week (normally Saturday morning US time) plus automatic retries
-for the next six days.
+* Weekends and NYSE holidays are skipped (the job knows the exchange calendar).
+* A day counts as final from 6 pm New York time, so a run after that reports that day.
+* Prices are always the as-of day's close: a retry that happens once the market is open
+  still reports yesterday's close, never an intraday price.
+* **History:** every trading day is kept for 90 days; older days are thinned to one per
+  week (the week's last trading day), kept indefinitely. Pick any of them on the dashboard.
 
 ### When a source goes down
 
@@ -97,13 +103,36 @@ for the next six days.
 
 ## Everyday tasks
 
-**Change the ticker list** - edit the workbook, then on your computer:
+**Add or remove tickers on the dashboard** - press **Manage tickers**. The first time,
+it asks for a GitHub access token (a pre-filled link creates one; pick this repository
+under "Repository access"). After that:
+
+* *Add*: type the symbol (as Yahoo Finance shows it) and optionally the company and
+  country. It is saved to `universe.csv`, which starts the job; only the new ticker is
+  fetched and it appears in about 3-5 minutes. If Yahoo does not recognise the symbol,
+  the panel says so.
+* *Remove*: open the ticker's detail panel → **Remove from the list**. It disappears at
+  once, stops being fetched, and stays in earlier days. Removed tickers are kept in
+  `universe.csv` with `hidden` = 1, so **Restore** brings them back with their labels.
+* *Run the update now*: retries immediately instead of waiting for the next scheduled run.
+
+The token stays in that browser (only for the tab session unless "Remember" is ticked)
+and is sent only to GitHub. Anyone with it can change this repository, so keep it private;
+revoke it at GitHub → Settings → Developer settings → Personal access tokens. A second
+person (Dwight) needs his own GitHub account added as a collaborator, plus his own token:
+GitHub's fine-grained tokens only reach repositories owned by the token's owner, so for a
+collaborator either use a classic token with the `public_repo` scope, or move the
+repository into a free GitHub organization you both belong to.
+
+**Change the ticker list from the workbook** - edit the workbook, then on your computer:
 
 ```bash
 python3 -m pipeline.import_universe "Equity Universe Version 2.xlsx"
 ```
 
-Commit the updated `universe.csv`. New tickers are fetched on the next run. (This one step
+Commit the updated `universe.csv`. New tickers are fetched on the next run. Tickers
+removed on the dashboard stay removed; tickers added on the dashboard but missing from the
+workbook are dropped (the command lists them). (This one step
 needs `pip install openpyxl`; nothing else does.) You can also edit `universe.csv` directly.
 
 **Add figures of your own (upload a sheet)**
@@ -171,11 +200,11 @@ how many EPS years to show) are all in `pipeline/config.py`.
 ## Layout
 
 ```
-pipeline/run.py            the weekly refresh (plan → fetch → assemble → health report)
+pipeline/run.py            the daily refresh (plan → fetch → assemble → health report)
 pipeline/sources/          one module per source: yahoo.py, nasdaq.py, macro.py
 pipeline/compute.py        dividend maths, Altman Z, Piotroski F, currency conversion
 pipeline/net.py            polite HTTP client: pacing, retries, back-off, circuit breaker
-pipeline/snapshot.py       weekly files, carry-forward of last good values, overrides
+pipeline/snapshot.py       daily files and retention, carry-forward of last good values, overrides
 pipeline/manual.py         reads the sheets of hand-entered figures in manual/
 pipeline/health.py         what the Data health tab shows
 pipeline/report.py         GitHub issue + pass/fail for the workflow

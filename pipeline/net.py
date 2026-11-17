@@ -6,7 +6,7 @@
 * stops calling a host that keeps refusing (circuit breaker), so a blocked or
   broken source is reported on the dashboard rather than hammered
 
-Only the standard library is used so that the weekly job has nothing to install.
+Only the standard library is used so that the scheduled job has nothing to install.
 """
 from __future__ import annotations
 

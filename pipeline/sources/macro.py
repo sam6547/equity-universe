@@ -166,7 +166,7 @@ def sp500(client, as_of):
         growth = compute.index_cagrs(price, as_of, horizons)
         if end and growth:
             out = {"level": compute.round_sig(end[1], 7), "date": end[0].isoformat(), "cagr": {"price": growth},
-                   "source": "Yahoo Finance (^GSPC weekly closes)"}
+                   "source": "Yahoo Finance (^GSPC daily closes)"}
         else:
             err = "price history too short"
     if out is None:
@@ -205,7 +205,7 @@ def sp500(client, as_of):
 # --------------------------------------------------------------------------
 def fx_series(client, currency, base, as_of):
     # type: (net.Client, str, str, dt.date) -> Tuple[Optional[List[Tuple[dt.date, float]]], str]
-    """Weekly rates: units of `base` per one unit of `currency`."""
+    """Daily rates: units of `base` per one unit of `currency`."""
     start = as_of - dt.timedelta(days=int(6.2 * 365.25))
     points, err = yahoo.fetch_series(client, "%s%s=X" % (currency, base), start, as_of)
     if points:

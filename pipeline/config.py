@@ -51,6 +51,10 @@ BLOCK_PAUSE_MAX_S = 300
 BLOCK_MAX_STRIKES = 5        # consecutive pauses without a success -> give up on the host for this run
 ERROR_MAX_CONSECUTIVE = 15   # consecutive network/5xx failures -> give up on the host for this run
 
+# Every trading day's snapshot is kept this long; older ones are thinned to one per week
+# (the week's last trading day), so weekly history is kept indefinitely.
+DAILY_RETENTION_DAYS = 90
+
 # Sector/industry change rarely: refresh each ticker's profile every N weeks (staggered).
 PROFILE_REFRESH_WEEKS = 4
 
@@ -65,7 +69,7 @@ SP500_HORIZONS = (1, 3, 5, 10, 20, 30)
 # Health thresholds (share of applicable tickers whose fetch failed).
 DEGRADED_ABOVE = 0.02
 DOWN_ABOVE = 0.50
-COVERAGE_DROP_ALERT = 0.10   # a field losing >10 points of coverage week-over-week is flagged
+COVERAGE_DROP_ALERT = 0.10   # a field losing >10 points of coverage since the previous snapshot is flagged
 
 RUN_LOG_KEEP = 120           # runs kept in runs.json
 

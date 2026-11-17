@@ -1,15 +1,23 @@
 name: Refresh data
 
-# Runs every day. The first run after the US trading week closes (Saturday) does the full
-# refresh; the following days retry anything that failed, or simply record that the job is
-# alive. Every run republishes the dashboard, so a failure shows up on the page itself.
+# Runs every morning before the US market opens and reports the previous trading day's close
+# (weekends and NYSE holidays are skipped). The first run does the refresh (about 20 minutes);
+# the later ones retry anything that failed, or simply record that the job is alive.
+# Times are UTC, so in New York they shift by an hour with daylight saving:
+#   10:17 UTC = 5:17 am EST / 6:17 am EDT     (main run - normally ready by 6:45 am New York)
+#   11:17 UTC = 6:17 am EST / 7:17 am EDT     (retry)
+#   12:17 UTC = 7:17 am EST / 8:17 am EDT     (last retry, still before the 9:30 open)
+# GitHub can start scheduled runs late at busy times; the margin before the open allows for that.
+# Every run republishes the dashboard, so a failure shows up on the page itself.
 on:
   schedule:
-    - cron: "17 11 * * *"          # 11:17 UTC daily (off the hour: GitHub's scheduler is busiest at :00)
+    - cron: "17 10 * * *"
+    - cron: "17 11 * * *"
+    - cron: "17 12 * * *"
   workflow_dispatch:
     inputs:
       force:
-        description: "Re-fetch everything for the current week (normally only missing pieces are fetched)"
+        description: "Re-fetch everything for the latest trading day (normally only missing pieces are fetched)"
         type: boolean
         default: false
   push:

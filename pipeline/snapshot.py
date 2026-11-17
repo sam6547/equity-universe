@@ -1,11 +1,14 @@
-"""Weekly snapshots: one JSON file per week under site/data/snapshots/.
+"""Daily snapshots: one JSON file per trading day under site/data/snapshots/.
 
 A row is a flat dict per ticker. Values belong to a *dataset* (one upstream call).
-When a dataset cannot be fetched, last week's values are carried forward and the
-row records that they are stale, so the dashboard can say exactly what is old.
+When a dataset cannot be fetched, the previous snapshot's values are carried forward
+and the row records that they are stale, so the dashboard can say exactly what is old.
 
-Row status codes, stored in row["st"][dataset] (absent means fresh this week):
-    "s:YYYY-MM-DD"  stale - fetch failed, values carried from that week
+Retention: every trading day is kept for config.DAILY_RETENTION_DAYS; older than that,
+only the last trading day of each week is kept.
+
+Row status codes, stored in row["st"][dataset] (absent means fresh in this snapshot):
+    "s:YYYY-MM-DD"  stale - fetch failed, values carried from that day's snapshot
     "m"             missing - fetch failed and there was nothing to carry
     "n"             the source has no data for this ticker (not an outage)
     "c:YYYY-MM-DD"  cached on purpose (slow-changing data inside its refresh window)
@@ -23,7 +26,7 @@ from . import compute, config, dates, result as res, universe
 
 # dataset id -> row keys it owns
 DATASET_FIELDS = {
-    "q": ("yname", "exch", "exch_raw", "cur", "price", "pweek", "plag", "chg1w", "hi52", "lo52", "ret1y",
+    "q": ("yname", "exch", "exch_raw", "cur", "price", "pdate", "pweek", "plag", "chg1d", "chg1w", "hi52", "lo52", "ret1y",
           "dy", "div_ttm", "dg5", "dg5_old", "div_freq", "div_last", "div_lapsed", "div_gap", "div_odd"),
     "f": ("fcur", "fx", "fx_missing", "fy_end", "eps_a", "eps_ar", "mcap", "val_date", "ev", "pe", "fpe", "peg", "feps",
           "ebitda", "ebitda_b", "fcf", "fcf_b", "eps_ttm", "unit_flag", "z", "zx", "z_miss", "z_est", "f", "ft",
@@ -103,10 +106,10 @@ def rows_by_symbol(snap):
 # rows
 # --------------------------------------------------------------------------
 def needs_fetch(row, dataset):
-    """True when this dataset failed earlier in the week, or was never attempted for this row.
+    """True when this dataset failed earlier for this snapshot, or was never attempted for this row.
 
-    "Never attempted" happens when a new kind of data is added to the job mid-week: the row has
-    neither values nor a status for it, so it is picked up on the next run instead of waiting a week.
+    "Never attempted" happens when a new kind of data is added to the job: the row has neither
+    values nor a status for it, so it is picked up on the next run instead of waiting for a new day.
     """
     code = (row.get("st") or {}).get(dataset, "")
     if code == "m" or code.startswith("s:"):
@@ -120,7 +123,7 @@ def has_values(row, dataset):
 
 
 def data_date(row, dataset, snap_as_of):
-    """Which week the row's values for this dataset come from."""
+    """Which snapshot (trading day) the row's values for this dataset come from."""
     code = (row.get("st") or {}).get(dataset, "")
     if code[:2] in ("s:", "c:"):
         return code[2:]
@@ -162,7 +165,7 @@ def set_no_data(row, dataset):
 def carry(row, dataset, base_row, base_as_of, code="s"):
     """Copy this dataset's values from `base_row`; mark stale (or cached). Returns True if something was carried."""
     if base_row is row:
-        return has_values(row, dataset)   # retry of the same week: values and status are already in place
+        return has_values(row, dataset)   # retry of the same day: values and status are already in place
     clear_dataset(row, dataset)
     if not base_row or not base_as_of or not has_values(base_row, dataset):
         row["st"][dataset] = "m"
@@ -324,8 +327,33 @@ def eps_years(as_of):
     return list(range(as_of.year - config.EPS_YEARS_BACK, as_of.year + config.EPS_YEARS_FORWARD + 1))
 
 
+def snapshots_to_prune(days, latest, keep_days=None):
+    # type: (Iterable[dt.date], dt.date, Optional[int]) -> List[dt.date]
+    """Snapshots older than the retention window that are not the last trading day of their week."""
+    keep_days = config.DAILY_RETENTION_DAYS if keep_days is None else keep_days
+    cutoff = latest - dt.timedelta(days=keep_days)
+    last_of_week = {}
+    for day in days:
+        key = day.isocalendar()[:2]
+        if day > last_of_week.get(key, dt.date.min):
+            last_of_week[key] = day
+    keepers = set(last_of_week.values())
+    return sorted(d for d in days if d < cutoff and d not in keepers)
+
+
+def prune_snapshots(latest):
+    """Delete daily snapshots past the retention window (one per week is kept). Returns the dates removed."""
+    removed = snapshots_to_prune(list_snapshot_dates(), latest)
+    for day in removed:
+        try:
+            os.remove(str(snapshot_path(day)))
+        except OSError:
+            pass
+    return removed
+
+
 def update_index(entry):
-    """Insert/replace this week's entry and drop entries whose file no longer exists."""
+    """Insert/replace this snapshot's entry and drop entries whose file no longer exists."""
     index = read_json(config.INDEX_JSON, {}) or {}
     existing = {e.get("as_of"): e for e in index.get("snapshots", []) if isinstance(e, dict)}
     existing[entry["as_of"]] = entry

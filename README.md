@@ -72,14 +72,27 @@ What that costs, column by column (the dashboard's *Data health* tab carries the
 
 ## How the daily refresh works
 
-The job reports the **previous trading day's close** and runs three times every morning
-(GitHub Actions; times are UTC, so New York times shift by an hour with daylight saving):
+The job reports the **most recent trading day's close**. A day counts as final from 6 pm
+New York time, so the main run is that evening and the dashboard is normally up to date
+by about 7 pm. GitHub starts scheduled runs on a best-effort basis (at busy times late, or
+not at all: on 18 Nov 2026 it skipped all three morning runs), so there are eight runs a
+day; whichever gets there first does the refresh and the rest only check in (about 30 seconds each).
+Times are UTC, so New York times shift by an hour with daylight saving:
 
 | UTC   | New York (winter / summer) | What it does |
 |-------|----------------------------|--------------|
-| 10:17 | 5:17 am / 6:17 am          | full refresh, about 20 minutes, ~3,900 polite requests |
-| 11:17 | 6:17 am / 7:17 am          | retries anything that failed, otherwise just checks in |
-| 12:17 | 7:17 am / 8:17 am          | last retry, still well before the 9:30 open |
+| 23:37 | 6:37 pm / 7:37 pm          | main run: full refresh, about 15 minutes, ~3,000 polite requests |
+| 01:47 | 8:47 pm / 9:47 pm          | retries anything that failed, otherwise just checks in |
+| 04:07 | 11:07 pm / 12:07 am        | retry |
+| 07:27 | 2:27 am / 3:27 am          | retry |
+| 10:17 | 5:17 am / 6:17 am          | retry |
+| 11:17 | 6:17 am / 7:17 am          | retry |
+| 12:17 | 7:17 am / 8:17 am          | retry |
+| 13:07 | 8:07 am / 9:07 am          | last retry, before the 9:30 open |
+
+If every run is skipped, the dashboard says so from 9 am (winter) / 10 am (summer) New York time, and
+*Manage tickers → Run the update now* (or GitHub → Actions → *Refresh data* → *Run workflow*)
+fetches the day straight away.
 
 * Weekends and NYSE holidays are skipped (the job knows the exchange calendar).
 * A day counts as final from 6 pm New York time, so a run after that reports that day.

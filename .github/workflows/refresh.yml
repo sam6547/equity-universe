@@ -1,19 +1,23 @@
 name: Refresh data
 
-# Runs every morning before the US market opens and reports the previous trading day's close
-# (weekends and NYSE holidays are skipped). The first run does the refresh (about 20 minutes);
-# the later ones retry anything that failed, or simply record that the job is alive.
-# Times are UTC, so in New York they shift by an hour with daylight saving:
-#   10:17 UTC = 5:17 am EST / 6:17 am EDT     (main run - normally ready by 6:45 am New York)
-#   11:17 UTC = 6:17 am EST / 7:17 am EDT     (retry)
-#   12:17 UTC = 7:17 am EST / 8:17 am EDT     (last retry, still before the 9:30 open)
-# GitHub can start scheduled runs late at busy times; the margin before the open allows for that.
-# Every run republishes the dashboard, so a failure shows up on the page itself.
+# Reports the most recent trading day's close (weekends and NYSE holidays are skipped).
+# A day counts as final from 6 pm New York time, so the evening run normally publishes it
+# the same night; the overnight and morning runs are retries. Whichever run gets there
+# first does the refresh (about 15 minutes); the rest just record that the job is alive.
+# GitHub's scheduler is best effort: at busy times it starts runs late or skips them
+# altogether (on 18 Nov 2026 all three morning runs were skipped), so there are eight
+# chances a night, all off the hour, and at least five before the 9:30 open.
+# Times are UTC; in New York they are 5 hours earlier in winter (EST), 4 in summer (EDT).
 on:
   schedule:
-    - cron: "17 10 * * *"
-    - cron: "17 11 * * *"
-    - cron: "17 12 * * *"
+    - cron: "37 23 * * *"   # 6:37 pm EST / 7:37 pm EDT   main run, the evening of the close
+    - cron: "47 1 * * *"    # 8:47 pm EST / 9:47 pm EDT
+    - cron: "7 4 * * *"     # 11:07 pm EST / 12:07 am EDT
+    - cron: "27 7 * * *"    # 2:27 am EST / 3:27 am EDT
+    - cron: "17 10 * * *"   # 5:17 am EST / 6:17 am EDT
+    - cron: "17 11 * * *"   # 6:17 am EST / 7:17 am EDT
+    - cron: "17 12 * * *"   # 7:17 am EST / 8:17 am EDT
+    - cron: "7 13 * * *"    # 8:07 am EST / 9:07 am EDT   last chance before the open
   workflow_dispatch:
     inputs:
       force:

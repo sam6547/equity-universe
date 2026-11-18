@@ -11,7 +11,8 @@ How a run decides what to do:
   * Snapshot exists with failures   -> retry only what failed.
   * Ticker list or hand-entered figures changed -> fetch only new tickers, rewrite the snapshot.
   * Snapshot exists and is complete -> nothing to fetch; just record that the job is alive.
-The schedule runs it several times each morning before the open, so a failed first run is retried.
+The schedule runs it eight times between the evening of the close and the next open, so a
+skipped or failed run is retried.
 
 The job always writes status.json, even when sources fail or the code crashes, so the
 dashboard can show what went wrong.

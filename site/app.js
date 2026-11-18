@@ -319,19 +319,19 @@
       if (hours > 26) {
         out.push({ level: hours > 50 ? 'critical' : 'warning',
           title: 'The scheduled job has not checked in for ' + (hours < 48 ? Math.round(hours) + ' hours.' : Math.round(hours / 24) + ' days.'),
-          detail: 'It should run three times every morning (last seen ' + fmtStamp(st.last_check) + '). The schedule may be paused or the job may be failing to start.' });
+          detail: 'It should run several times a day (last seen ' + fmtStamp(st.last_check) + '). The schedule may be paused or the job may be failing to start.' });
       }
     }
     var latest = state.index && state.index.latest;
     var next = st && st.next_session;
     if (latest && next && latest < next) {
-      // the close of `next` should be on the page by 10:00 New York (14:00/15:00 UTC) the following morning
-      var due = parseDay(next).getTime() + DAY + 15 * 3600000;
+      // the close of `next` should be on the page by 14:00 UTC the following morning (9 am EST / 10 am EDT)
+      var due = parseDay(next).getTime() + DAY + 14 * 3600000;
       var overdue = (now.getTime() - due) / 3600000;
       if (overdue > 0) {
         out.push({ level: overdue > 24 ? 'critical' : 'warning',
           title: 'No data yet for the close of ' + fmtDay(next, true) + '.',
-          detail: 'The newest snapshot is for ' + fmtDay(latest, true) + '. The morning refresh has not completed.' });
+          detail: 'The newest snapshot is for ' + fmtDay(latest, true) + '. None of the scheduled refreshes has completed (GitHub sometimes skips scheduled runs). Manage tickers \u2192 Run the update now fetches it straight away.' });
       }
     }
     return out;
@@ -1006,7 +1006,7 @@
           h('span', null, 'Reporting the close of ', h('b', { text: st.as_of ? fmtDay(st.as_of, true) : '\u2014' })),
           st.duration_s != null ? h('span', null, 'Took ', h('b', { text: Math.max(1, Math.round(st.duration_s / 60)) + ' min' })) : null)),
       h('p', { class: 'lead', style: 'margin-top:10px', text: st.headline || '' }),
-      h('p', { class: 'fine', text: 'The job runs three times every morning before the open and reports the previous trading day\u2019s close (weekends and market holidays are skipped). The first run does the full refresh; the later ones retry anything that failed, or simply check in. ' +
+      h('p', { class: 'fine', text: 'The job reports each trading day\u2019s close, normally the same evening (from 6:37 pm New York time in winter, 7:37 pm in summer), and runs seven more times overnight and before the open in case GitHub skips a run or a source fails (weekends and market holidays are skipped). The first run to get there does the full refresh; the later ones retry anything that failed, or simply check in. ' +
         'Daily snapshots are kept for 90 days, then one per week. When a source fails, the previous day\u2019s figures stay on screen marked \u25f7 until a retry succeeds.' }),
       links.actions ? h('div', { class: 'links' }, extLink('Job runs and logs', links.actions), links.run ? extLink('Latest run', links.run) : null, links.issues ? extLink('Open issues', links.issues) : null) : null);
     wrap.appendChild(head);

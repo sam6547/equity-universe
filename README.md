@@ -134,8 +134,9 @@ and is sent only to GitHub. Anyone with it can change this repository, so keep i
 revoke it at GitHub → Settings → Developer settings → Personal access tokens. A second
 person (Dwight) needs his own GitHub account added as a collaborator, plus his own token:
 GitHub's fine-grained tokens only reach repositories owned by the token's owner, so for a
-collaborator either use a classic token with the `public_repo` scope, or move the
-repository into a free GitHub organization you both belong to.
+collaborator use a classic token with the `repo` scope (the panel's *Not the owner?* link
+fills that in; `public_repo` is enough to add and remove tickers, but GitHub needs `repo` for
+*Run the update now*), or move the repository into a free GitHub organization you both belong to.
 
 **Change the ticker list from the workbook** - edit the workbook, then on your computer:
 

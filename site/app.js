@@ -1484,6 +1484,11 @@
       'description=' + encodeURIComponent('Lets the dashboard add and remove tickers in ' + repoSlug()),
       'target_name=' + encodeURIComponent(owner), 'expires_in=90', 'contents=write', 'actions=write'].join('&');
   }
+  function classicTokenLink() {
+    // A collaborator on someone else's personal repository needs a classic token; "repo" is the scope
+    // GitHub requires for starting a workflow run ("Run the update now"), not just for editing files.
+    return 'https://github.com/settings/tokens/new?scopes=repo&description=' + encodeURIComponent('Equity dashboard - tickers (' + repoSlug() + ')');
+  }
   function renderManage() {
     var box = $('manage');
     if (box.hidden) return;
@@ -1508,8 +1513,12 @@
       h('li', null, h('a', { href: tokenLink(), target: '_blank', rel: 'noopener noreferrer', text: 'Open GitHub’s token page ↗' }), ' (signed in as the repository owner). Name, permissions and a 90-day expiry are filled in.'),
       h('li', { text: 'Under “Repository access” choose “Only select repositories” and pick ' + ((repoSlug() || '').split('/')[1] || 'this repository') + '.' }),
       h('li', { text: 'Press “Generate token”, copy it, and paste it here.' })));
+    box.appendChild(h('p', { class: 'fine' }, h('b', { text: 'Not the owner? ' }),
+      'If you were added as a collaborator, GitHub’s new-style tokens cannot reach this repository. Use ',
+      h('a', { href: classicTokenLink(), target: '_blank', rel: 'noopener noreferrer', text: 'a classic token ↗' }),
+      ' instead: the “repo” box is already ticked; choose an expiry (90 days is fine), press “Generate token” at the bottom, copy it (it starts ghp_) and paste it here.'));
     var form = h('form', { class: 'mform', autocomplete: 'off' },
-      h('label', { class: 'field' }, h('span', { text: 'GitHub token' }), h('input', { type: 'password', name: 'token', placeholder: 'github_pat_…', spellcheck: 'false', required: true })),
+      h('label', { class: 'field' }, h('span', { text: 'GitHub token' }), h('input', { type: 'password', name: 'token', placeholder: 'github_pat_… or ghp_…', spellcheck: 'false', required: true })),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'remember' }), ' Remember on this browser (otherwise forgotten when the tab closes)'),
       h('div', null, h('button', { type: 'submit', class: 'btn primary', text: 'Connect' })));
     form.addEventListener('submit', function (e) { e.preventDefault(); connect(form.token.value, form.remember.checked); });
